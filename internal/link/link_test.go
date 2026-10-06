@@ -1,6 +1,7 @@
 package link
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/korjavin/zulip-gcal-service/internal/config"
+	"github.com/korjavin/zulip-gcal-service/internal/lifecycle"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
 	"github.com/korjavin/zulip-gcal-service/internal/zulip"
 )
@@ -23,13 +26,14 @@ type sent struct {
 }
 
 type env struct {
-	t      *testing.T
-	st     *store.Store
-	l      *Linker
-	mu     sync.Mutex
-	dms    []sent
-	polled []string
-	msgID  int64
+	t       *testing.T
+	st      *store.Store
+	l       *Linker
+	mu      sync.Mutex
+	dms     []sent
+	polled  []string
+	revoked []string
+	msgID   int64
 }
 
 // Fake Zulip: users 1 (a@x), 2 (b@x), 3 (c@x); hidden@x is not found.
@@ -62,11 +66,25 @@ func newEnv(t *testing.T) *env {
 		e.mu.Unlock()
 		fmt.Fprint(w, `{"result":"success","id":42}`)
 	})
+	mux.HandleFunc("POST /revoke", func(w http.ResponseWriter, r *http.Request) {
+		e.mu.Lock()
+		e.revoked = append(e.revoked, r.FormValue("token"))
+		e.mu.Unlock()
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
+	secrets, err := config.NewSecrets(bytes.Repeat([]byte{7}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zc := zulip.New(srv.URL, "bot@x", "key")
+	ops := lifecycle.New(&config.Config{PublicURL: "https://cal.example", Secrets: secrets}, st, zc)
+	ops.RevokeURL = srv.URL + "/revoke"
+	ops.Poll = func(id string) { e.polled = append(e.polled, id) }
 	e.l = &Linker{
 		St:    st,
-		Zulip: zulip.New(srv.URL, "bot@x", "key"),
+		Zulip: zc,
+		Ops:   ops,
 		Account: func(r *http.Request) (string, bool) {
 			id := r.Header.Get("X-Account")
 			return id, id != ""
