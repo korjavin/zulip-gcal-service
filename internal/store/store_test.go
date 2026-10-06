@@ -58,7 +58,7 @@ func TestMigrationsIdempotent(t *testing.T) {
 	}
 	var v int
 	s.DB.QueryRow(`PRAGMA user_version`).Scan(&v)
-	if v != 1 {
+	if v != 2 {
 		t.Fatalf("user_version = %d", v)
 	}
 	var mode string

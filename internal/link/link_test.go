@@ -58,7 +58,11 @@ func newEnv(t *testing.T) *env {
 			fmt.Fprint(w, `{"result":"error","msg":"No such user","code":"BAD_REQUEST"}`)
 			return
 		}
-		fmt.Fprintf(w, `{"result":"success","user":{"user_id":%d,"email":"x","is_active":true,"timezone":"Pacific/Auckland"}}`, id)
+		tz := "Pacific/Auckland"
+		if id == 3 {
+			tz = "" // never set in the profile
+		}
+		fmt.Fprintf(w, `{"result":"success","user":{"user_id":%d,"email":"x","is_active":true,"timezone":"%s"}}`, id, tz)
 	})
 	mux.HandleFunc("POST /api/v1/messages", func(w http.ResponseWriter, r *http.Request) {
 		e.mu.Lock()

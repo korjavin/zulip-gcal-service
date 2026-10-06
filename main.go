@@ -75,6 +75,7 @@ func run() error {
 	lk := &link.Linker{St: st, Zulip: zc, Account: au.Account, BotHealthy: func() bool { return bot.Healthy() },
 		BotID: botID, PublicURL: cfg.PublicURL, ZulipSite: cfg.ZulipSite, Poll: pl.Trigger, Meetings: pl.Meetings, Ops: ops}
 	lk.Register(mux)
+	go lk.RunAgenda(ctx)
 	(&web.Site{St: st, Zulip: zc, Account: au.Account, PollInterval: cfg.PollInterval,
 		Resume: func(ctx context.Context, id string) error { _, err := ops.Resume(ctx, id); return err }}).Register(mux)
 	(&settings.Page{St: st, Zulip: zc, Account: au.Account, CSRF: au.CSRFToken, Tokens: ops.TokenSource, Poll: pl.Trigger,

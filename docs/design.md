@@ -30,8 +30,8 @@ One Google account per Zulip user. To link a different one: Disconnect, then
 sign in again.
 
 Everything else is optional, on the settings page (same Google sign-in):
-reminder timing, which calendars, skip declined events, pause, disconnect,
-send a test reminder.
+reminder timing, which calendars, skip declined events, a daily agenda DM
+(off by default), pause, disconnect, send a test reminder.
 
 Without leaving Zulip, the user can DM the bot:
 
@@ -185,6 +185,14 @@ One implementation each, used by the web pages and by bot commands alike.
   timezone, UTC if unknown; a Google error gets a generic reply), `help`. Anything
   else gets help. `start` on a disconnected account replies with the
   reconnect link.
+* **Daily agenda** (opt-in on the settings page): at the chosen local time,
+  optionally Monday to Friday only, one DM listing the meetings still ahead
+  that day (read live, as `today`). Local means the Zulip profile timezone
+  (UTC if unset), stored in settings and re-read after each agenda and on
+  every settings save. At most one per local day: the day is claimed in one
+  conditional write before the send and released on failure, so the next
+  tick retries; an agenda more than an hour late (service down) is skipped.
+  Paused or unlinked accounts get none.
 * Exact command words are matched first, then 6-char link codes: `resume` is
   6 letters and must not count as a wrong code. Code generation never draws a
   command word.

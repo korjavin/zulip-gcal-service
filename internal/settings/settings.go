@@ -81,6 +81,9 @@ type view struct {
 	Calendars      []calendar
 	CalendarsError bool
 	Saved, Tested  bool
+	Agenda         bool   // daily agenda DM on
+	AgendaTime     string // "15:04", local to the user's Zulip timezone
+	AgendaWorkdays bool
 }
 
 func (p *Page) show(w http.ResponseWriter, r *http.Request) {
@@ -92,9 +95,15 @@ func (p *Page) show(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	v := view{CSRF: p.CSRF(id), Leads: leads, Saved: r.URL.Query().Has("saved"), Tested: r.URL.Query().Has("tested")}
 	var calsJSON string
-	err := p.St.DB.QueryRowContext(ctx, `SELECT s.timing, s.lead_minutes, s.skip_declined, s.calendars, a.paused
+	var agenda int
+	err := p.St.DB.QueryRowContext(ctx, `SELECT s.timing, s.lead_minutes, s.skip_declined, s.calendars, a.paused,
+		coalesce(s.agenda_minute, -1), s.agenda_workdays
 		FROM settings s JOIN accounts a ON a.id = s.account_id WHERE a.id = ?`, id).
-		Scan(&v.Timing, &v.Lead, &v.SkipDeclined, &calsJSON, &v.Paused)
+		Scan(&v.Timing, &v.Lead, &v.SkipDeclined, &calsJSON, &v.Paused, &agenda, &v.AgendaWorkdays)
+	v.Agenda, v.AgendaTime = agenda >= 0, "08:00"
+	if v.Agenda {
+		v.AgendaTime = fmt.Sprintf("%02d:%02d", agenda/60, agenda%60)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
@@ -207,7 +216,14 @@ func (p *Page) save(w http.ResponseWriter, r *http.Request, id string) {
 			uniq = append(uniq, c)
 		}
 	}
-	if (timing != "google" && timing != "fixed") || err != nil || lead < 1 || lead > 60 || len(uniq) > 100 {
+	var agenda any // NULL = off
+	at, atErr := time.Parse("15:04", r.PostFormValue("agenda_time"))
+	if r.PostFormValue("agenda") != "" {
+		agenda = at.Hour()*60 + at.Minute()
+	} else {
+		atErr = nil // the time field is ignored while off
+	}
+	if (timing != "google" && timing != "fixed") || err != nil || atErr != nil || lead < 1 || lead > 60 || len(uniq) > 100 {
 		web.Error(w, http.StatusBadRequest, web.Message{Title: "Could not save", Text: "Please check the form and try again.",
 			Button: "Back to settings", URL: "/settings"})
 		return
@@ -221,8 +237,10 @@ func (p *Page) save(w http.ResponseWriter, r *http.Request, id string) {
 	calsJSON, _ := json.Marshal(uniq)
 	err = withTx(r.Context(), p.St.DB, func(tx *sql.Tx) error {
 		ctx := r.Context()
-		if _, err := tx.ExecContext(ctx, `UPDATE settings SET timing = ?, lead_minutes = ?, skip_declined = ?, calendars = ?
-			WHERE account_id = ?`, timing, lead, r.PostFormValue("skip_declined") != "", string(calsJSON), id); err != nil {
+		// agenda_tz = '': re-read the Zulip profile timezone, the user may just have fixed it.
+		if _, err := tx.ExecContext(ctx, `UPDATE settings SET timing = ?, lead_minutes = ?, skip_declined = ?, calendars = ?,
+			agenda_minute = ?, agenda_workdays = ?, agenda_tz = '' WHERE account_id = ?`, timing, lead, r.PostFormValue("skip_declined") != "",
+			string(calsJSON), agenda, r.PostFormValue("agenda_workdays") != "", id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET schedule_rev = schedule_rev + 1 WHERE id = ?`, id); err != nil {

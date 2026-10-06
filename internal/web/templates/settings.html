@@ -24,6 +24,13 @@ minutes before</label>
 <legend>Events</legend>
 <label class="choice"><input type="checkbox" name="skip_declined" value="1"{{if .SkipDeclined}} checked{{end}}> Skip events I declined</label>
 </fieldset>
+<fieldset>
+<legend>Daily agenda</legend>
+<label class="choice"><input type="checkbox" name="agenda" value="1"{{if .Agenda}} checked{{end}}>
+Send me today's meetings every day at <input type="time" name="agenda_time" value="{{.AgendaTime}}" aria-label="Agenda time"></label>
+<label class="choice"><input type="checkbox" name="agenda_workdays" value="1"{{if .AgendaWorkdays}} checked{{end}}> Only Monday to Friday</label>
+<p class="muted hint">The time is in the timezone of your Zulip profile.</p>
+</fieldset>
 <p><button class="button" type="submit">Save</button></p>
 </form>
 
