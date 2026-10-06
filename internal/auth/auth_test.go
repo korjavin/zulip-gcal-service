@@ -295,6 +295,13 @@ func TestNewUser(t *testing.T) {
 	if lead != 10 {
 		t.Fatalf("settings lead = %d", lead)
 	}
+	if loc := b.signIn(alice()).Header().Get("Location"); loc != "/link" {
+		t.Fatalf("unlinked account goes to %q, want /link", loc)
+	}
+	e.st.DB.Exec(`UPDATE accounts SET zulip_user_id = 1`)
+	if loc := b.signIn(alice()).Header().Get("Location"); loc != "/" {
+		t.Fatalf("linked account goes to %q, want /", loc)
+	}
 }
 
 func TestReturningUserNoForcedConsent(t *testing.T) {

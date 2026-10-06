@@ -178,7 +178,13 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.setCookie(w, sessionCookie, "session", session{Account: id, Expires: time.Now().Add(sessionTTL).Unix()}, sessionTTL)
-	http.Redirect(w, r, "/", http.StatusFound) // ponytail: Zulip linking (zgc-civ.2) takes over from "/"
+	var linked bool
+	a.st.DB.QueryRowContext(ctx, `SELECT zulip_user_id IS NOT NULL FROM accounts WHERE id = ?`, id).Scan(&linked)
+	if linked {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/link", http.StatusFound) // Zulip linking (internal/link)
 }
 
 // storedTokenWorks reports whether the account for sub has a refresh token

@@ -17,6 +17,7 @@ import (
 	"github.com/korjavin/zulip-gcal-service/internal/auth"
 	"github.com/korjavin/zulip-gcal-service/internal/config"
 	"github.com/korjavin/zulip-gcal-service/internal/lifecycle"
+	"github.com/korjavin/zulip-gcal-service/internal/link"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
 	"github.com/korjavin/zulip-gcal-service/internal/zulip"
 )
@@ -56,14 +57,17 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// ponytail: no commands yet (zgc-civ.2); messages are read and ignored.
-	bot := zulip.NewBot(zc, st, botID, func(context.Context, zulip.Message) error { return nil })
-	go bot.Run(ctx)
-
 	mux := routes(st)
 	au := auth.New(cfg, st, auth.Google)
 	au.Register(mux)
 	lifecycle.New(cfg, st, zc).Register(mux, au.Account)
+	var bot *zulip.Bot
+	// ponytail: Poll stays nil until the poller (zgc-lvo.1) exists.
+	lk := &link.Linker{St: st, Zulip: zc, Account: au.Account, BotHealthy: func() bool { return bot.Healthy() },
+		BotID: botID, PublicURL: cfg.PublicURL, ZulipSite: cfg.ZulipSite}
+	lk.Register(mux)
+	bot = zulip.NewBot(zc, st, botID, lk.HandleDM)
+	go bot.Run(ctx)
 	srv := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
