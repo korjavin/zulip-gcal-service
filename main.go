@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/korjavin/zulip-gcal-service/internal/auth"
 	"github.com/korjavin/zulip-gcal-service/internal/config"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
 )
@@ -46,7 +47,9 @@ func run() error {
 	}
 	defer st.Close()
 
-	srv := &http.Server{Addr: ":8080", Handler: routes(st), ReadHeaderTimeout: 10 * time.Second}
+	mux := routes(st)
+	auth.New(cfg, st, auth.Google).Register(mux)
+	srv := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 	slog.Info("listening", "addr", srv.Addr)
@@ -67,7 +70,7 @@ func run() error {
 	return nil
 }
 
-func routes(st *store.Store) http.Handler {
+func routes(st *store.Store) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		if err := st.DB.PingContext(r.Context()); err != nil {
