@@ -58,3 +58,12 @@ button.link {
   color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer;
 }
 [hidden] { display: none !important; }
+h2 { font-size: 1.2rem; margin: 2rem 0 .5rem; }
+fieldset { border: 0; padding: 0; margin: 0 0 1.5rem; }
+legend { font-weight: 600; margin-bottom: .5rem; padding: 0; }
+.choice { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; padding: .35rem 0; }
+.choice input { width: 1.2rem; height: 1.2rem; margin: 0; }
+.hint { margin: 0 0 .25rem 1.7rem; font-size: .95rem; }
+select { font: inherit; padding: .2rem .4rem; }
+.swatch { display: inline-block; width: .9rem; height: .9rem; border-radius: 50%; }
+.button.danger { background: #c62828; color: #fff; }

@@ -276,8 +276,11 @@ markdown. The website shows times with the browser's locale
 |---|---|---|
 | `GET /` | anyone | none; landing page, or status if signed in |
 | `GET /login`, `GET /oauth/callback` | users | OAuth `state` + PKCE |
-| `GET /link/status` | users | session (own account only) |
-| `GET/POST /settings`, `POST /resume`, `POST /disconnect`, `POST /logout`, `POST /test-reminder` | users | session + CSRF |
+| `GET /link`, `GET /link/status` | users | session (own account only) |
+| `GET /settings` | users | session |
+| `POST /settings`, `POST /test-reminder`, `POST /pause` | users | session + CSRF (form token and `Sec-Fetch-Site`/`Origin` check) |
+| `POST /resume`, `POST /disconnect`, `POST /logout` | users | session + CSRF (`Sec-Fetch-Site`/`Origin` check) |
+| `GET /style.css` | anyone | none |
 | `GET /healthz` | Docker/proxy | none |
 
 ## 7. Not now

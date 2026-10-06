@@ -282,6 +282,12 @@ func (a *Auth) Account(r *http.Request) (string, bool) {
 	return s.Account, true
 }
 
+// CSRFToken is the settings forms' token for the account (§3.2): an HMAC of
+// its id, so it needs no storage and dies with the account.
+func (a *Auth) CSRFToken(accountID string) string {
+	return base64.RawURLEncoding.EncodeToString(a.mac("csrf", []byte(accountID)))
+}
+
 func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
 	clearCookie(w, sessionCookie)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
