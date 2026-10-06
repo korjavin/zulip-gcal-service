@@ -161,8 +161,12 @@ func (s *Store) Handled(ctx context.Context, messageID int64) (bool, error) {
 	return n > 0, err
 }
 
-// PurgeHandled deletes receipts older than 7 days.
+// PurgeHandled deletes receipts older than 7 days and tombstones (§3.3) older
+// than 1 hour.
 func (s *Store) PurgeHandled(ctx context.Context, now time.Time) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM handled_messages WHERE handled_at < ?`, now.Add(-7*24*time.Hour).Unix())
+	if _, err := s.DB.ExecContext(ctx, `DELETE FROM handled_messages WHERE handled_at < ?`, now.Add(-7*24*time.Hour).Unix()); err != nil {
+		return err
+	}
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM tombstones WHERE created_at < ? AND revoking = 0`, now.Add(-time.Hour).Unix())
 	return err
 }

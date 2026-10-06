@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"html/template"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -68,6 +69,11 @@ func New(cfg *config.Config, st *store.Store, zc *zulip.Client) *Ops {
 // cached in memory per (account, token_rev). A refresh that Google answers
 // with invalid_grant runs LostAccess and fails with ErrNoAccess.
 func (o *Ops) TokenSource(ctx context.Context, accountID string) (oauth2.TokenSource, error) {
+	// Read and publish under the lock, so a Disconnect/LostAccess commit is
+	// either seen here or followed by a forget that kills what we publish.
+	// ponytail: one lock for all accounts, per-account locks if it ever contends.
+	o.mu.Lock()
+	defer o.mu.Unlock()
 	var enc []byte
 	var rev int64
 	var status string
@@ -79,8 +85,6 @@ func (o *Ops) TokenSource(ctx context.Context, accountID string) (oauth2.TokenSo
 	if err != nil {
 		return nil, err
 	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
 	old := o.cache[accountID]
 	if old != nil && old.rev == rev {
 		return old, nil
@@ -89,7 +93,7 @@ func (o *Ops) TokenSource(ctx context.Context, accountID string) (oauth2.TokenSo
 	if err != nil {
 		return nil, err
 	}
-	o.killLocked(accountID)
+	o.killLocked(accountID, rev-1)
 	ts := &guarded{o: o, id: accountID, rev: rev,
 		ts: o.oauth.TokenSource(o.httpCtx, &oauth2.Token{RefreshToken: string(rt)})}
 	o.cache[accountID] = ts
@@ -118,18 +122,21 @@ func (g *guarded) Token() (*oauth2.Token, error) {
 		}
 		return nil, fmt.Errorf("%w: %w", ErrNoAccess, err)
 	}
+	if g.dead.Load() { // invalidated while refreshing
+		return nil, ErrNoAccess
+	}
 	return t, err
 }
 
-// forget invalidates every token source handed out for the account.
-func (o *Ops) forget(accountID string) {
+// forget invalidates the account's token source if its token_rev <= upTo.
+func (o *Ops) forget(accountID string, upTo int64) {
 	o.mu.Lock()
-	o.killLocked(accountID)
+	o.killLocked(accountID, upTo)
 	o.mu.Unlock()
 }
 
-func (o *Ops) killLocked(accountID string) {
-	if g := o.cache[accountID]; g != nil {
+func (o *Ops) killLocked(accountID string, upTo int64) {
+	if g := o.cache[accountID]; g != nil && g.rev <= upTo {
 		g.dead.Store(true)
 		delete(o.cache, accountID)
 	}
@@ -157,7 +164,7 @@ func (o *Ops) LostAccess(ctx context.Context, accountID string, rev int64) error
 	if err != nil {
 		return err
 	}
-	o.forget(accountID)
+	o.forget(accountID, rev) // a newer grant's source stays
 	if zulipID.Valid {
 		msg := "I lost access to your Google Calendar, reminders are off. Reconnect: " + o.publicURL
 		if _, err := o.zc.SendDM(ctx, zulipID.Int64, msg); err != nil {
@@ -211,17 +218,14 @@ func (o *Ops) setPaused(ctx context.Context, accountID string, paused bool, hook
 func (o *Ops) Disconnect(ctx context.Context, accountID string, hooks ...TxHook) (revoked bool, err error) {
 	var sub string
 	var enc []byte
-	now := time.Now().Unix()
 	err = o.write(ctx, func(tx *sql.Tx) error {
+		now := time.Now().Unix() // taken under the write lock (BEGIN IMMEDIATE)
 		err := tx.QueryRowContext(ctx, `DELETE FROM accounts WHERE id = ? RETURNING google_sub, enc_refresh_token`,
 			accountID).Scan(&sub, &enc)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNoAccess
 		}
 		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM tombstones WHERE created_at < ?`, now-3600); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO tombstones (google_sub, created_at, revoking) VALUES (?, ?, 1)
@@ -233,7 +237,7 @@ func (o *Ops) Disconnect(ctx context.Context, accountID string, hooks ...TxHook)
 	if err != nil {
 		return false, err
 	}
-	o.forget(accountID)
+	o.forget(accountID, math.MaxInt64)
 	if enc != nil {
 		if rt, derr := o.secrets.Decrypt(enc); derr == nil {
 			revoked = o.revoke(ctx, string(rt))

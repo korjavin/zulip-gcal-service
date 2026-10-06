@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func open(t *testing.T, path string) *Store {
@@ -180,5 +181,18 @@ func TestSendingResetOnStartup(t *testing.T) {
 	}
 	if n := count(t, s, `SELECT count(*) FROM tombstones WHERE revoking = 1`); n != 0 {
 		t.Fatal("a crashed revocation must not block sign-in after restart")
+	}
+}
+
+func TestPurgeTombstones(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "db"))
+	now := time.Unix(10_000, 0)
+	exec(t, s, `INSERT INTO tombstones (google_sub, created_at, revoking) VALUES ('old', ?, 0), ('fresh', ?, 0)`,
+		now.Add(-61*time.Minute).Unix(), now.Add(-59*time.Minute).Unix())
+	if err := s.PurgeHandled(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	if count(t, s, `SELECT count(*) FROM tombstones WHERE google_sub = 'fresh'`) != 1 || count(t, s, `SELECT count(*) FROM tombstones`) != 1 {
+		t.Fatal("want only the fresh tombstone kept")
 	}
 }
