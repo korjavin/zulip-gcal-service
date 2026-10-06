@@ -1,0 +1,12 @@
+{{define "content"}}
+{{if .}}
+<h1>Disconnected</h1>
+<p class="lead">Reminders are off and we deleted everything this service stored about you.</p>
+{{if .Revoked}}<p>Google access was revoked too.</p>
+{{else}}<p>We could not confirm that Google removed our access. You can remove it yourself at <a href="https://myaccount.google.com/permissions">your Google account permissions</a>.</p>{{end}}
+{{else}}
+<h1>Something went wrong</h1>
+<p class="lead">Please try again.</p>
+{{end}}
+<p><a href="/">Back to start</a></p>
+{{end}}

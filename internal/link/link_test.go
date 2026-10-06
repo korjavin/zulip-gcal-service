@@ -49,6 +49,10 @@ func newEnv(t *testing.T) *env {
 	mux.HandleFunc("GET /api/v1/users/{key}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		id, ok := users[r.PathValue("key")]
+		if r.PathValue("key") == "down@x" {
+			w.WriteHeader(502)
+			return
+		}
 		if !ok {
 			w.WriteHeader(400)
 			fmt.Fprint(w, `{"result":"error","msg":"No such user","code":"BAD_REQUEST"}`)
@@ -180,7 +184,7 @@ func TestAutoMatch(t *testing.T) {
 
 	// Another Google account with the same Zulip user is rejected.
 	e.account("B", "a@x", true)
-	if rec := e.get("/link", "B"); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "disconnect it first") {
+	if rec := e.get("/link", "B"); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "Disconnect that one first") {
 		t.Fatalf("got %d %s", rec.Code, rec.Body)
 	}
 	if zid, _ := e.linkedTo("B"); zid != 0 {
@@ -206,12 +210,18 @@ func TestCodePage(t *testing.T) {
 		t.Fatal("two accounts share a code")
 	}
 	body := e.get("/link", "A").Body.String()
-	if !strings.Contains(body, `href="https://zulip.example/#narrow/dm/100"`) || strings.Contains(body, `id="down" style="color:#b00">`) {
+	if !strings.Contains(body, `href="https://zulip.example/#narrow/dm/100"`) || strings.Contains(body, `id="down" class="card lost">`) {
 		t.Fatalf("page = %s", body)
 	}
 	e.l.BotHealthy = func() bool { return false }
-	if body := e.get("/link", "A").Body.String(); !strings.Contains(body, `id="down" style="color:#b00">`) {
+	if body := e.get("/link", "A").Body.String(); !strings.Contains(body, `id="down" class="card lost">`) {
 		t.Fatalf("bot down not shown: %s", body)
+	}
+
+	// Zulip down and the bot too: no code that could not be delivered.
+	e.account("D", "down@x", true)
+	if rec := e.get("/link", "D"); rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "reach Zulip right now") {
+		t.Fatalf("zulip down: %d %s", rec.Code, rec.Body)
 	}
 
 	// Expired: a new code replaces it.

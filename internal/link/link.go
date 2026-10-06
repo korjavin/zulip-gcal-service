@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/korjavin/zulip-gcal-service/internal/lifecycle"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
+	"github.com/korjavin/zulip-gcal-service/internal/web"
 	"github.com/korjavin/zulip-gcal-service/internal/zulip"
 )
 
@@ -54,7 +54,7 @@ func (l *Linker) welcome() string {
 }
 
 func (l *Linker) help() string {
-	return "Hi! I send reminders about your Google Calendar meetings. To connect, open " + l.PublicURL + "/login" +
+	return "Hi! I send reminders about your Google Calendar meetings. To connect, open " + l.PublicURL +
 		" and sign in with Google. No reply from me within a minute? Send your message again or use the website."
 }
 
@@ -145,7 +145,7 @@ func (l *Linker) account(ctx context.Context, id string) (accountRow, error) {
 func (l *Linker) page(w http.ResponseWriter, r *http.Request) {
 	id, ok := l.Account(r)
 	if !ok {
-		http.Redirect(w, r, "/login", http.StatusFound)
+		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}
 	ctx := r.Context()
@@ -180,10 +180,15 @@ func (l *Linker) page(w http.ResponseWriter, r *http.Request) {
 				render(w, http.StatusOK, view{Connected: true})
 				return
 			}
-			render(w, http.StatusConflict, view{Msg: "This Zulip account is already connected to another Google account — disconnect it first."})
+			web.Error(w, http.StatusConflict, web.Message{Title: "Already connected",
+				Text: "This Zulip account is already connected to another Google account. Disconnect that one first."})
 			return
 		case !errors.Is(err, zulip.ErrNotFound):
 			slog.Warn("zulip lookup by e-mail failed", "err", err) // fall back to the code
+			if !l.BotHealthy() {                                   // the code needs the bot too: nothing works right now
+				web.Error(w, http.StatusServiceUnavailable, web.ZulipUnreachable)
+				return
+			}
 		}
 	}
 	code, err := l.liveCode(ctx, id, time.Now())
@@ -212,7 +217,7 @@ func (l *Linker) status(w http.ResponseWriter, r *http.Request) {
 
 func (l *Linker) fail(w http.ResponseWriter, err error) {
 	slog.Error("link page", "err", err)
-	render(w, http.StatusInternalServerError, view{Msg: "Something went wrong. Please try again."})
+	web.Error(w, http.StatusInternalServerError, web.Oops)
 }
 
 // HandleDM is the bot's message handler (zulip.Handler): a command word,
@@ -226,7 +231,7 @@ func (l *Linker) HandleDM(ctx context.Context, m zulip.Message) error {
 		return l.command(ctx, m, cmd)
 	}
 	if l.throttled(m.SenderID, now) {
-		return l.replyOnce(ctx, m, "Too many wrong codes. Please wait 15 minutes, then open "+l.PublicURL+"/login to get a new one.")
+		return l.replyOnce(ctx, m, "Too many wrong codes. Please wait 15 minutes, then open "+l.PublicURL+" to get a new one.")
 	}
 	var accountID string
 	var linked, fresh bool
@@ -252,7 +257,7 @@ func (l *Linker) HandleDM(ctx context.Context, m zulip.Message) error {
 		return nil
 	case accountID == "":
 		l.wrong[m.SenderID] = append(l.wrong[m.SenderID], now)
-		return l.send(ctx, m.SenderID, "That code is not valid or expired — open "+l.PublicURL+"/login to get a new one.")
+		return l.send(ctx, m.SenderID, "That code is not valid or expired — open "+l.PublicURL+" to get a new one.")
 	}
 	return l.send(ctx, m.SenderID, "Your Zulip account is already connected to a Google account. To connect a different one, disconnect first, then sign in again at "+l.PublicURL+".")
 }
@@ -319,42 +324,9 @@ func withTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
 
 type view struct {
 	Connected bool
-	Msg       string
 	Code      string
 	ZulipDM   string
 	BotDown   bool
 }
 
-var pageTmpl = template.Must(template.New("").Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Calendar reminders</title></head>
-<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem">
-<div id="main">
-{{if .Connected}}<h1>Connected</h1><p>Reminders go to you in Zulip as direct messages from <b>Calendar</b>.</p>
-{{else if .Code}}<h1>One more step</h1>
-<p>Send this code to the Calendar bot in Zulip:</p>
-<p style="font-size:2.5rem;letter-spacing:.3rem;font-family:monospace"><b>{{.Code}}</b></p>
-<p><a href="{{.ZulipDM}}" target="_blank" rel="noopener" style="display:inline-block;padding:.7rem 1.2rem;background:#6492fe;color:#fff;border-radius:.4rem;text-decoration:none">Open Zulip</a></p>
-<p>The code works for 15 minutes. This page updates by itself once the bot has it.</p>
-<p id="down" style="color:#b00"{{if not .BotDown}} hidden{{end}}>Zulip connection is down, try again in a minute.</p>
-<p><a href="/link">Refresh</a></p>
-<script>
-setInterval(async () => {
-  try {
-    const r = await fetch("/link/status", {cache: "no-store"});
-    if (!r.ok) return;
-    const s = await r.json();
-    if (s.linked) location.reload();
-    document.getElementById("down").hidden = s.bot_healthy;
-  } catch (e) {}
-}, 3000);
-</script>
-{{else}}<p>{{.Msg}}</p><p><a href="/">Back</a></p>{{end}}
-</div>
-</body></html>`))
-
-func render(w http.ResponseWriter, code int, v view) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(code)
-	pageTmpl.Execute(w, v)
-}
+func render(w http.ResponseWriter, code int, v view) { web.Render(w, code, "link", v) }

@@ -377,6 +377,14 @@ func TestStateMismatch(t *testing.T) {
 	}
 }
 
+func TestSwitchAccount(t *testing.T) {
+	e := newEnv(t)
+	loc, _ := url.Parse(e.browser().do("GET", "/login?switch=1").Header().Get("Location"))
+	if loc.Query().Get("prompt") != "select_account" {
+		t.Fatalf("switch login = %s", loc)
+	}
+}
+
 func TestPKCEVerifier(t *testing.T) {
 	e := newEnv(t)
 	b := e.browser()
