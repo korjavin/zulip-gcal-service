@@ -36,7 +36,7 @@ func (l *Linker) statusText(ctx context.Context, id, status string) string {
 	}
 	r += "Next reminders:"
 	for _, p := range ps {
-		r += fmt.Sprintf("\n* <time:%s> **%s**", p.Start.UTC().Format(time.RFC3339), sender.Escape(p.Title))
+		r += fmt.Sprintf("\n* **%s**, meeting at <time:%s>", sender.Escape(p.Title), p.Start.UTC().Format(time.RFC3339))
 	}
 	return r
 }
@@ -69,13 +69,14 @@ func (l *Linker) today(ctx context.Context, zulipID int64, id string) string {
 			loc = tz
 		}
 	}
-	y, mo, d := time.Now().In(loc).Date()
+	now := time.Now()
+	y, mo, d := now.In(loc).Date()
 	end := time.Date(y, mo, d+1, 0, 0, 0, 0, loc)
 	var lines []string
 	seen := map[string]bool{}
-	for _, p := range l.pending(ctx, id, "event_start, fire_at", 100) { // several offsets of one event repeat
+	for _, p := range l.pending(ctx, id, "event_start, fire_at", 1000) { // several offsets of one event repeat
 		k := p.Title + p.Start.String()
-		if !p.Start.Before(end) || seen[k] {
+		if !p.Start.Before(end) || p.Start.Before(now) || seen[k] { // pending rows outlive the start by the send grace
 			continue
 		}
 		seen[k] = true

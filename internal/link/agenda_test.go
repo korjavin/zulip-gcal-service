@@ -18,14 +18,15 @@ func TestStatusToday(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	add("Soon", time.Second)
+	add("Past", -time.Minute) // started, reminder still pending
+	add("Soon", time.Minute)
 	add("Later", 72*time.Hour)
 	for _, c := range []struct {
 		text    string
 		in, out []string
 	}{
-		{"status", []string{"Connected as **A@x**", "7 min before", "**Soon**", "**Later**"}, nil},
-		{"/Today", []string{"Still ahead today:", "**Soon**"}, []string{"Later"}},
+		{"status", []string{"Connected as **A@x**", "7 min before", "**Soon**"}, []string{"Later"}}, // only the next 3
+		{"/Today", []string{"Still ahead today:", "**Soon**"}, []string{"Later", "Past"}},
 		{"help", []string{"**status**", "**today**"}, nil},
 	} {
 		d := e.dm(1, c.text)
