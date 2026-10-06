@@ -171,11 +171,12 @@ func (l *Linker) agenda(ctx context.Context, r agendaRow) error {
 		return nil
 	}
 	// The claim: at most one agenda per local day, and a pause, unlink or
-	// opt-out committed before it wins.
+	// settings change committed before it wins.
 	res, err := l.St.DB.ExecContext(ctx, `UPDATE settings SET agenda_sent = ?
-		WHERE account_id = ? AND agenda_sent = ? AND agenda_minute IS NOT NULL AND EXISTS (SELECT 1 FROM accounts a
+		WHERE account_id = ? AND agenda_sent = ? AND agenda_minute = ? AND agenda_workdays = ? AND agenda_tz = ?
+			AND EXISTS (SELECT 1 FROM accounts a
 			WHERE a.id = settings.account_id AND a.status = 'connected' AND a.zulip_user_id = ? AND a.paused = 0)`,
-		day, r.id, r.sent, r.zid)
+		day, r.id, r.sent, r.minute, r.workdays, r.tz, r.zid)
 	if err != nil {
 		return err
 	}
@@ -185,7 +186,8 @@ func (l *Linker) agenda(ctx context.Context, r agendaRow) error {
 	// ponytail: a crash between the claim and the send loses that day's agenda; accepted, it is a convenience.
 	ms, err := l.Meetings(ctx, r.id, now, time.Date(y, mo, d+1, 0, 0, 0, 0, loc))
 	if err == nil {
-		_, err = l.Zulip.SendDM(ctx, r.zid, agendaText(ms, l.PublicURL))
+		// Once: a 429 releases the claim; the retry passes the next tick's checks.
+		_, err = l.Zulip.Once().SendDM(ctx, r.zid, agendaText(ms, l.PublicURL))
 	}
 	if err != nil && !errors.Is(err, zulip.ErrRecipient) { // a deactivated recipient: the sender unlinks it
 		slog.Warn("agenda not sent, retrying next tick", "account", r.id) // never the error text: it may carry event data
