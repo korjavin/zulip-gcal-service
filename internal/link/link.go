@@ -52,7 +52,7 @@ func (l *Linker) welcome() string {
 }
 
 func (l *Linker) help() string {
-	return "Hi! I send reminders about your Google Calendar meetings. To connect, open " + l.PublicURL +
+	return "Hi! I send reminders about your Google Calendar meetings. To connect, open " + l.PublicURL + "/login" +
 		" and sign in with Google. No reply from me within a minute? Send your message again or use the website."
 }
 
@@ -143,7 +143,7 @@ func (l *Linker) account(ctx context.Context, id string) (accountRow, error) {
 func (l *Linker) page(w http.ResponseWriter, r *http.Request) {
 	id, ok := l.Account(r)
 	if !ok {
-		http.Redirect(w, r, "/", http.StatusFound)
+		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
 	ctx := r.Context()
@@ -221,7 +221,7 @@ func (l *Linker) HandleDM(ctx context.Context, m zulip.Message) error {
 		return l.replyOnce(ctx, m, l.help())
 	}
 	if l.throttled(m.SenderID, now) {
-		return l.replyOnce(ctx, m, "Too many wrong codes. Please wait 15 minutes, then open "+l.PublicURL+" to get a new one.")
+		return l.replyOnce(ctx, m, "Too many wrong codes. Please wait 15 minutes, then open "+l.PublicURL+"/login to get a new one.")
 	}
 	var accountID string
 	var linked, fresh bool
@@ -247,7 +247,7 @@ func (l *Linker) HandleDM(ctx context.Context, m zulip.Message) error {
 		return nil
 	case accountID == "":
 		l.wrong[m.SenderID] = append(l.wrong[m.SenderID], now)
-		return l.send(ctx, m.SenderID, "That code is not valid or expired — open "+l.PublicURL+" to get a new one.")
+		return l.send(ctx, m.SenderID, "That code is not valid or expired — open "+l.PublicURL+"/login to get a new one.")
 	}
 	return l.send(ctx, m.SenderID, "Your Zulip account is already connected to a Google account. To connect a different one, disconnect first, then sign in again at "+l.PublicURL+".")
 }
