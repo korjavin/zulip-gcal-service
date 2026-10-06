@@ -73,7 +73,8 @@ func New(cfg *config.Config, st *store.Store, ep Endpoints) *Auth {
 func (a *Auth) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /login", a.login)
 	mux.HandleFunc("GET /oauth/callback", a.callback)
-	mux.HandleFunc("POST /logout", a.logout)
+	// CSRF: stdlib Sec-Fetch-Site/Origin check, no token needed for a bare logout.
+	mux.Handle("POST /logout", http.NewCrossOriginProtection().Handler(http.HandlerFunc(a.logout)))
 }
 
 // loginState travels in the signed state cookie between /login and the callback.

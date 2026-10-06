@@ -464,7 +464,14 @@ func TestSessions(t *testing.T) {
 		t.Fatal("state cookie accepted as session")
 	}
 
-	// Logout.
+	// Logout; a cross-site POST cannot log anyone out.
+	req := httptest.NewRequest("POST", "/logout", nil)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("cross-site logout = %d %v", rec.Code, rec.Result().Cookies())
+	}
 	c := e.browser()
 	c.jar[sessionCookie] = saved
 	expect(t, c.do("POST", "/logout"), http.StatusSeeOther, "/")
