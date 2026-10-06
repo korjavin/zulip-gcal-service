@@ -198,7 +198,9 @@ func (c *Client) once(ctx context.Context, method, path string, params url.Value
 		return err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	// No size cap: ZULIP_SITE is admin-configured, and a capped /events
+	// backlog would be retried forever without ever being acknowledged.
+	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
