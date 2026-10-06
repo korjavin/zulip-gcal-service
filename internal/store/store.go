@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"net/url"
 	"sort"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -135,4 +136,30 @@ func (s *Store) guarded(ctx context.Context, where string, fn func(*sql.Tx) erro
 		return err
 	}
 	return tx.Commit()
+}
+
+// MarkHandled records the receipt for a Zulip message id inside the tx that
+// applies the command's effect (design §3.4). false means the message was
+// already handled: the caller must skip the effect and roll back.
+func MarkHandled(ctx context.Context, tx *sql.Tx, messageID int64, now time.Time) (bool, error) {
+	res, err := tx.ExecContext(ctx, `INSERT INTO handled_messages (message_id, handled_at) VALUES (?, ?)
+		ON CONFLICT (message_id) DO NOTHING`, messageID, now.Unix())
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// Handled reports whether a receipt for messageID exists.
+func (s *Store) Handled(ctx context.Context, messageID int64) (bool, error) {
+	var n int
+	err := s.DB.QueryRowContext(ctx, `SELECT count(*) FROM handled_messages WHERE message_id = ?`, messageID).Scan(&n)
+	return n > 0, err
+}
+
+// PurgeHandled deletes receipts older than 7 days.
+func (s *Store) PurgeHandled(ctx context.Context, now time.Time) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM handled_messages WHERE handled_at < ?`, now.Add(-7*24*time.Hour).Unix())
+	return err
 }

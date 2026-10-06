@@ -17,6 +17,7 @@ import (
 	"github.com/korjavin/zulip-gcal-service/internal/auth"
 	"github.com/korjavin/zulip-gcal-service/internal/config"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
+	"github.com/korjavin/zulip-gcal-service/internal/zulip"
 )
 
 func main() {
@@ -46,6 +47,17 @@ func run() error {
 		return err
 	}
 	defer st.Close()
+
+	// ponytail: Zulip unreachable at startup is fatal too; the container's
+	// restart policy retries.
+	zc := zulip.New(cfg.ZulipSite, cfg.ZulipBotEmail, cfg.ZulipBotAPIKey)
+	botID, err := zc.CheckServer(ctx)
+	if err != nil {
+		return err
+	}
+	// ponytail: no commands yet (zgc-civ.2); messages are read and ignored.
+	bot := zulip.NewBot(zc, st, botID, func(context.Context, zulip.Message) error { return nil })
+	go bot.Run(ctx)
 
 	mux := routes(st)
 	auth.New(cfg, st, auth.Google).Register(mux)
