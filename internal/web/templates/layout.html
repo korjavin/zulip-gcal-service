@@ -1,0 +1,23 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Calendar reminders</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+{{template "content" .}}
+</main>
+<script>
+// Times are rendered in UTC on the server; show them in the browser's own
+// timezone and locale. Without JavaScript the UTC text stays.
+for (const t of document.querySelectorAll("time[datetime]")) {
+  const d = new Date(t.dateTime);
+  if (!isNaN(d)) t.textContent = new Intl.DateTimeFormat(undefined, {weekday: "short", hour: "numeric", minute: "2-digit"}).format(d);
+}
+</script>
+</body>
+</html>{{end}}

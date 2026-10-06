@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"html/template"
 	"log/slog"
 	"math"
 	"net/http"
@@ -24,6 +23,7 @@ import (
 	"github.com/korjavin/zulip-gcal-service/internal/auth"
 	"github.com/korjavin/zulip-gcal-service/internal/config"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
+	"github.com/korjavin/zulip-gcal-service/internal/web"
 	"github.com/korjavin/zulip-gcal-service/internal/zulip"
 )
 
@@ -307,23 +307,11 @@ func (o *Ops) Register(mux *http.ServeMux, account func(*http.Request) (string, 
 				http.Redirect(w, r, "/", http.StatusSeeOther)
 				return
 			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			if err != nil {
 				slog.Error("disconnect", "err", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				disconnectTmpl.Execute(w, nil)
+				web.Render(w, http.StatusInternalServerError, "disconnected", nil)
 				return
 			}
-			disconnectTmpl.Execute(w, map[string]bool{"Revoked": revoked})
+			web.Render(w, http.StatusOK, "disconnected", map[string]bool{"Revoked": revoked})
 		})))
 }
-
-var disconnectTmpl = template.Must(template.New("").Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Calendar reminders</title></head>
-<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem">
-{{if .}}<p>Disconnected — we deleted everything this service stored about you.</p>
-{{if .Revoked}}<p>Google access was revoked too.</p>
-{{else}}<p>We could not confirm that Google removed our access. You can remove it yourself at <a href="https://myaccount.google.com/permissions">your Google account permissions</a>.</p>{{end}}
-{{else}}<p>Something went wrong. Please try again.</p>{{end}}
-<p><a href="/">Back to start</a></p>
-</body></html>`))

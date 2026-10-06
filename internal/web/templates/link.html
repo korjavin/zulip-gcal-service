@@ -1,0 +1,26 @@
+{{define "content"}}
+{{if .Connected}}
+<h1>Connected</h1>
+<p class="lead">Reminders go to you in Zulip as direct messages from <b>Calendar</b>.</p>
+<p><a class="button" href="/">See your next reminder</a></p>
+{{else}}
+<h1>One more step</h1>
+<p class="lead">Send this code to the <b>Calendar</b> bot in Zulip:</p>
+<p class="code"><b>{{.Code}}</b></p>
+<p><a class="button big" href="{{.ZulipDM}}" target="_blank" rel="noopener">Open Zulip</a></p>
+<p class="muted">The code works for 15 minutes. This page updates by itself once the bot has it.</p>
+<p id="down" class="card lost"{{if not .BotDown}} hidden{{end}}>We can't reach Zulip right now. Try again in a minute.</p>
+<p><a href="/link">Refresh</a></p>
+<script>
+setInterval(async () => {
+  try {
+    const r = await fetch("/link/status", {cache: "no-store"});
+    if (!r.ok) return;
+    const s = await r.json();
+    if (s.linked) location.reload();
+    document.getElementById("down").hidden = s.bot_healthy;
+  } catch (e) {}
+}, 3000);
+</script>
+{{end}}
+{{end}}
