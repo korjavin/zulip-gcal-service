@@ -67,16 +67,18 @@ var (
 	Oops = Message{"Something went wrong", "Please try again.", "", ""}
 )
 
-// staleAfter: no successful poll for this long shows "can't read your calendar".
+// staleAfter: no successful poll for this long (or 3 poll intervals, if
+// longer) shows "can't read your calendar".
 const staleAfter = 15 * time.Minute
 
 // Site serves the start page, the stylesheet and POST /resume.
 type Site struct {
-	St      *store.Store
-	Zulip   *zulip.Client
-	Account func(*http.Request) (string, bool) // session check (auth.Auth.Account)
-	Resume  func(ctx context.Context, accountID string) error
-	Now     func() time.Time // nil = time.Now
+	St           *store.Store
+	Zulip        *zulip.Client
+	Account      func(*http.Request) (string, bool) // session check (auth.Auth.Account)
+	Resume       func(ctx context.Context, accountID string) error
+	PollInterval time.Duration
+	Now          func() time.Time // nil = time.Now
 }
 
 func (s *Site) Register(mux *http.ServeMux) {
@@ -135,7 +137,7 @@ func (s *Site) home(w http.ResponseWriter, r *http.Request) {
 		v.State = "lost"
 	case paused:
 		v.State = "paused"
-	case now.Sub(time.Unix(checked, 0)) > staleAfter:
+	case now.Sub(time.Unix(checked, 0)) > max(staleAfter, 3*s.PollInterval):
 		v.State = "stale"
 	default:
 		v.State = "ok"

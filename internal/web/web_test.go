@@ -22,6 +22,7 @@ type env struct {
 	st      *store.Store
 	mux     *http.ServeMux
 	resumed []string
+	site    *Site
 }
 
 // Fake Zulip knows user 7 (Ann Lee); everything else fails like an outage.
@@ -47,6 +48,7 @@ func newEnv(t *testing.T) *env {
 		},
 		Now: func() time.Time { return now }}
 	s.Register(e.mux)
+	e.site = s
 	return e
 }
 
@@ -122,6 +124,9 @@ func TestStatus(t *testing.T) {
 
 	e.exec(`UPDATE accounts SET last_poll_ok_at = ? WHERE id = 'A'`, now.Add(-16*time.Minute).Unix())
 	t.Run("stale", func(t *testing.T) { e.expect(t, "A", "We can't read your calendar right now, retrying") })
+	e.site.PollInterval = 10 * time.Minute // 16 min is not overdue at a 10-min cadence
+	t.Run("slow poll", func(t *testing.T) { e.expect(t, "A", "Next: ") })
+	e.site.PollInterval = 0
 	e.exec(`UPDATE accounts SET last_poll_ok_at = NULL, linked_at = ? WHERE id = 'A'`, recent) // just linked, first poll pending
 	t.Run("fresh link", func(t *testing.T) { e.expect(t, "A", "Next: ") })
 
