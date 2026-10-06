@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func open(t *testing.T, path string) *Store {
@@ -169,6 +170,7 @@ func TestSendingResetOnStartup(t *testing.T) {
 	id := addAccount(t, s, "a", 1)
 	exec(t, s, `UPDATE reminders SET state = 'sending'`)
 	exec(t, s, `INSERT INTO reminders (key, account_id, fire_at, event_start, payload, state, updated_at) VALUES ('sent1', ?, 0, 0, '{}', 'sent', 0)`, id)
+	exec(t, s, `INSERT INTO tombstones (google_sub, created_at, revoking) VALUES ('gone', 0, 1)`)
 	s.Close()
 	s = open(t, path)
 	if n := count(t, s, `SELECT count(*) FROM reminders WHERE state = 'pending'`); n != 1 {
@@ -176,5 +178,21 @@ func TestSendingResetOnStartup(t *testing.T) {
 	}
 	if n := count(t, s, `SELECT count(*) FROM reminders WHERE state = 'sent'`); n != 1 {
 		t.Fatalf("sent rows must not change, got %d", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM tombstones WHERE revoking = 1`); n != 0 {
+		t.Fatal("a crashed revocation must not block sign-in after restart")
+	}
+}
+
+func TestPurgeTombstones(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "db"))
+	now := time.Unix(10_000, 0)
+	exec(t, s, `INSERT INTO tombstones (google_sub, created_at, revoking) VALUES ('old', ?, 0), ('fresh', ?, 0)`,
+		now.Add(-61*time.Minute).Unix(), now.Add(-59*time.Minute).Unix())
+	if err := s.PurgeHandled(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	if count(t, s, `SELECT count(*) FROM tombstones WHERE google_sub = 'fresh'`) != 1 || count(t, s, `SELECT count(*) FROM tombstones`) != 1 {
+		t.Fatal("want only the fresh tombstone kept")
 	}
 }

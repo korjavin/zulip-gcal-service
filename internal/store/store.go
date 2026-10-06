@@ -48,7 +48,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	// Possible duplicate, never a loss (design §3.1).
-	if _, err := db.ExecContext(ctx, `UPDATE reminders SET state = 'pending' WHERE state = 'sending'`); err != nil {
+	// No revocation survives a restart; a tombstone left "revoking" by a crash
+	// would otherwise block that user's sign-in (design §3.3).
+	if _, err := db.ExecContext(ctx, `UPDATE reminders SET state = 'pending' WHERE state = 'sending';
+		UPDATE tombstones SET revoking = 0 WHERE revoking = 1`); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -158,8 +161,12 @@ func (s *Store) Handled(ctx context.Context, messageID int64) (bool, error) {
 	return n > 0, err
 }
 
-// PurgeHandled deletes receipts older than 7 days.
+// PurgeHandled deletes receipts older than 7 days and tombstones (§3.3) older
+// than 1 hour.
 func (s *Store) PurgeHandled(ctx context.Context, now time.Time) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM handled_messages WHERE handled_at < ?`, now.Add(-7*24*time.Hour).Unix())
+	if _, err := s.DB.ExecContext(ctx, `DELETE FROM handled_messages WHERE handled_at < ?`, now.Add(-7*24*time.Hour).Unix()); err != nil {
+		return err
+	}
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM tombstones WHERE created_at < ? AND revoking = 0`, now.Add(-time.Hour).Unix())
 	return err
 }
