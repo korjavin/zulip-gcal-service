@@ -405,6 +405,18 @@ func TestPollFailedPageChangesNothing(t *testing.T) {
 	}
 }
 
+func TestPollTransportErrorHidesCalendarID(t *testing.T) {
+	e := newEnv(t)
+	e.exec(`UPDATE settings SET calendars = '["colleague@example.com"]'`)
+	dead := httptest.NewServer(http.NotFoundHandler())
+	dead.Close()
+	e.p.BaseURL = dead.URL
+	err := e.p.Poll(context.Background(), "acc")
+	if err == nil || strings.Contains(err.Error(), "colleague") || strings.Contains(err.Error(), "example.com") {
+		t.Fatalf("want a transport error without the calendar id, got %v", err)
+	}
+}
+
 func TestPollStaleScheduleRev(t *testing.T) {
 	e := newEnv(t)
 	e.set("primary", page(ev("a", now.Add(time.Hour), mins(10))))
