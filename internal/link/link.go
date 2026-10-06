@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/korjavin/zulip-gcal-service/internal/lifecycle"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
 	"github.com/korjavin/zulip-gcal-service/internal/zulip"
 )
@@ -37,6 +38,7 @@ type Linker struct {
 	PublicURL  string
 	ZulipSite  string
 	Poll       func(accountID string) // immediate poll after linking; nil = none
+	Ops        *lifecycle.Ops         // bot commands stop/start/disconnect
 
 	wrong map[int64][]time.Time // ponytail: only touched by the sequential bot loop, no lock
 }
@@ -47,8 +49,8 @@ func (l *Linker) Register(mux *http.ServeMux) {
 }
 
 func (l *Linker) welcome() string {
-	// ponytail: the stop/start/disconnect line joins with zgc-civ.3.
-	return "Hi! I'll remind you about your Google Calendar meetings. Settings: " + l.PublicURL + "/settings"
+	return "Hi! I'll remind you about your Google Calendar meetings. Settings: " + l.PublicURL + "/settings\n" +
+		"Send me **stop** to pause reminders, **start** to resume, **disconnect** to delete your data, **help** for more."
 }
 
 func (l *Linker) help() string {
@@ -213,12 +215,15 @@ func (l *Linker) fail(w http.ResponseWriter, err error) {
 	render(w, http.StatusInternalServerError, view{Msg: "Something went wrong. Please try again."})
 }
 
-// HandleDM is the bot's message handler (zulip.Handler): a link code, else help.
+// HandleDM is the bot's message handler (zulip.Handler): a command word,
+// else a link code, else help.
 func (l *Linker) HandleDM(ctx context.Context, m zulip.Message) error {
 	now := time.Now()
 	code := strings.ToUpper(m.Text)
-	if !looksLikeCode(code) {
-		return l.replyOnce(ctx, m, l.help())
+	// ponytail: command words go first, so "resume" (6 letters) is never a
+	// wrong code; a drawn code that spells RESUME is a 1-in-10^9 miss.
+	if cmd := command(m.Text); cmd != "" || !looksLikeCode(code) {
+		return l.command(ctx, m, cmd)
 	}
 	if l.throttled(m.SenderID, now) {
 		return l.replyOnce(ctx, m, "Too many wrong codes. Please wait 15 minutes, then open "+l.PublicURL+"/login to get a new one.")

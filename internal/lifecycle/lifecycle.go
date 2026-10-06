@@ -30,8 +30,9 @@ import (
 // ErrNoAccess means the account is gone or has lost its Google access.
 var ErrNoAccess = errors.New("no google access")
 
-// TxHook runs inside an operation's write, e.g. store.MarkHandled for a bot
-// command (§3.4). An error rolls the whole write back.
+// TxHook runs inside an operation's write, before its changes, e.g.
+// store.MarkHandled for a bot command (§3.4). An error rolls the whole write
+// back and is returned as is.
 type TxHook func(*sql.Tx) error
 
 type Ops struct {
@@ -41,7 +42,7 @@ type Ops struct {
 	publicURL string
 	oauth     *oauth2.Config
 	httpCtx   context.Context // carries the HTTP client for token refreshes
-	revokeURL string
+	RevokeURL string          // Google's token revocation endpoint; tests point it at a fake
 
 	// Poll asks for an immediate poll of an account (resume); poller.Trigger. nil = none.
 	Poll func(accountID string)
@@ -59,7 +60,7 @@ func New(cfg *config.Config, st *store.Store, zc *zulip.Client) *Ops {
 			Endpoint:     oauth2.Endpoint{TokenURL: auth.Google.TokenURL, AuthStyle: oauth2.AuthStyleInParams},
 		},
 		httpCtx:   context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Timeout: 30 * time.Second}),
-		revokeURL: "https://oauth2.googleapis.com/revoke",
+		RevokeURL: "https://oauth2.googleapis.com/revoke",
 		cache:     map[string]*guarded{},
 	}
 }
@@ -165,7 +166,8 @@ func (o *Ops) LostAccess(ctx context.Context, accountID string, rev int64) error
 	}
 	o.forget(accountID, rev) // a newer grant's source stays
 	if zulipID.Valid {
-		msg := "I lost access to your Google Calendar, reminders are off. Reconnect: " + o.publicURL
+		msg := "I lost access to your Google Calendar, reminders are off. Reconnect: " + o.publicURL +
+			"\nOr send me *disconnect* to delete everything this service stored about you."
 		if _, err := o.zc.SendDM(ctx, zulipID.Int64, msg); err != nil {
 			slog.Warn("lost-access DM failed", "err", err)
 		}
@@ -191,6 +193,9 @@ func (o *Ops) Resume(ctx context.Context, accountID string, hooks ...TxHook) (ch
 
 func (o *Ops) setPaused(ctx context.Context, accountID string, paused bool, hooks []TxHook) (changed bool, err error) {
 	err = o.write(ctx, func(tx *sql.Tx) error {
+		if err := runHooks(tx, hooks); err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(ctx, `UPDATE accounts SET paused = ?, schedule_rev = schedule_rev + 1
 			WHERE id = ? AND paused <> ?`, paused, accountID, paused)
 		if err != nil {
@@ -201,11 +206,9 @@ func (o *Ops) setPaused(ctx context.Context, accountID string, paused bool, hook
 			return err
 		}
 		if changed = n == 1; changed {
-			if _, err := tx.ExecContext(ctx, cancelReminders, accountID); err != nil {
-				return err
-			}
+			_, err = tx.ExecContext(ctx, cancelReminders, accountID)
 		}
-		return runHooks(tx, hooks)
+		return err
 	})
 	return changed && err == nil, err
 }
@@ -219,6 +222,9 @@ func (o *Ops) Disconnect(ctx context.Context, accountID string, hooks ...TxHook)
 	var enc []byte
 	err = o.write(ctx, func(tx *sql.Tx) error {
 		now := time.Now().Unix() // taken under the write lock (BEGIN IMMEDIATE)
+		if err := runHooks(tx, hooks); err != nil {
+			return err
+		}
 		err := tx.QueryRowContext(ctx, `DELETE FROM accounts WHERE id = ? RETURNING google_sub, enc_refresh_token`,
 			accountID).Scan(&sub, &enc)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -227,11 +233,9 @@ func (o *Ops) Disconnect(ctx context.Context, accountID string, hooks ...TxHook)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO tombstones (google_sub, created_at, revoking) VALUES (?, ?, 1)
-			ON CONFLICT (google_sub) DO UPDATE SET created_at = excluded.created_at, revoking = 1`, sub, now); err != nil {
-			return err
-		}
-		return runHooks(tx, hooks)
+		_, err = tx.ExecContext(ctx, `INSERT INTO tombstones (google_sub, created_at, revoking) VALUES (?, ?, 1)
+			ON CONFLICT (google_sub) DO UPDATE SET created_at = excluded.created_at, revoking = 1`, sub, now)
+		return err
 	})
 	if err != nil {
 		return false, err
@@ -256,7 +260,7 @@ var revokeTimeout = 5 * time.Second // tests shorten it
 func (o *Ops) revoke(ctx context.Context, token string) bool {
 	ctx, cancel := context.WithTimeout(ctx, revokeTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "POST", o.revokeURL, strings.NewReader(url.Values{"token": {token}}.Encode()))
+	req, err := http.NewRequestWithContext(ctx, "POST", o.RevokeURL, strings.NewReader(url.Values{"token": {token}}.Encode()))
 	if err != nil {
 		return false
 	}

@@ -71,7 +71,7 @@ func run() error {
 	go func() { sender.New(st, zc).Run(ctx); close(senderDone) }()
 	var bot *zulip.Bot
 	lk := &link.Linker{St: st, Zulip: zc, Account: au.Account, BotHealthy: func() bool { return bot.Healthy() },
-		BotID: botID, PublicURL: cfg.PublicURL, ZulipSite: cfg.ZulipSite, Poll: pl.Trigger}
+		BotID: botID, PublicURL: cfg.PublicURL, ZulipSite: cfg.ZulipSite, Poll: pl.Trigger, Ops: ops}
 	lk.Register(mux)
 	bot = zulip.NewBot(zc, st, botID, lk.HandleDM)
 	go bot.Run(ctx)
