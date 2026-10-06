@@ -1,0 +1,25 @@
+# Run exactly one instance: the scheduler is not safe to run twice.
+services:
+  zulip-gcal:
+    image: ghcr.io/korjavin/zulip-gcal-service:latest
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - data:/data
+    ports:
+      - "8080:8080" # drop when Traefik (below) fronts the service
+    healthcheck:
+      test: ["CMD", "/zulip-gcal-service", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    # labels:
+    #   - traefik.enable=true
+    #   - traefik.http.routers.zulip-gcal.rule=Host(`${TRAEFIK_HOST}`)
+    #   - traefik.http.routers.zulip-gcal.entrypoints=websecure
+    #   - traefik.http.routers.zulip-gcal.tls.certresolver=letsencrypt
+    #   - traefik.http.services.zulip-gcal.loadbalancer.server.port=8080
+
+volumes:
+  data:
