@@ -41,10 +41,12 @@ func TestToday(t *testing.T) {
 	e.linkedAccount("A", 1, time.Now().Add(-time.Minute))
 	e.st.DB.Exec(`DELETE FROM reminders`) // nothing pending: the answer must not depend on reminders
 	e.st.DB.Exec(`INSERT INTO settings (account_id, lead_minutes, calendars) VALUES ('A', 10, '["primary"]')`)
+	now := time.Date(2030, 1, 15, 0, 0, 0, 0, time.UTC) // 13:00 in the fake user's Pacific/Auckland
+	e.l.Now = func() time.Time { return now }
 	failing := false
 	var q string
 	ev := func(id, title string, d time.Duration, extra string) string {
-		s := time.Now().Add(d).UTC().Format(time.RFC3339)
+		s := now.Add(d).UTC().Format(time.RFC3339)
 		return fmt.Sprintf(`{"id":"%s","summary":"%s","start":{"dateTime":"%s"},"end":{"dateTime":"%s"}%s}`, id, title, s, s, extra)
 	}
 	items := []string{

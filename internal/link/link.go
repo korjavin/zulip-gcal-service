@@ -39,6 +39,7 @@ type Linker struct {
 	PublicURL  string
 	ZulipSite  string
 	Poll       func(accountID string)                                                                    // immediate poll after linking; nil = none
+	Now        func() time.Time                                                                          // clock for "today"; nil = time.Now
 	Meetings   func(ctx context.Context, accountID string, from, to time.Time) ([]poller.Payload, error) // live calendar read for "today"
 	Ops        *lifecycle.Ops                                                                            // bot commands stop/start/disconnect
 

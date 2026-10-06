@@ -62,6 +62,9 @@ func (l *Linker) pending(ctx context.Context, id, order string, limit int) (out 
 // day, read live from Google Calendar (Zulip profile timezone, UTC if unknown).
 func (l *Linker) today(ctx context.Context, zulipID int64, id string) string {
 	now := time.Now()
+	if l.Now != nil {
+		now = l.Now()
+	}
 	loc := l.Zulip.UserLocation(ctx, zulipID)
 	y, mo, d := now.In(loc).Date()
 	ms, err := l.Meetings(ctx, id, now, time.Date(y, mo, d+1, 0, 0, 0, 0, loc))
