@@ -19,6 +19,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(healthcheck("http://127.0.0.1:8080/healthz"))
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err) // plain text: multi-line config problems stay readable
 		os.Exit(1)

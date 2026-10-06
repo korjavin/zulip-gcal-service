@@ -1,0 +1,9 @@
+.git
+.github
+.beads
+.claude
+.env
+data
+*.db
+*.db-*
+zulip-gcal-service
