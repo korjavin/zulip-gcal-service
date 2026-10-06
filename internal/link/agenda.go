@@ -2,6 +2,7 @@ package link
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -114,15 +115,20 @@ func (l *Linker) RunAgenda(ctx context.Context) {
 
 type agendaRow struct {
 	id, tz, sent string
-	zid          int64
+	zid, rev     int64
 	minute       int
 	workdays     bool
 }
 
+// agendaGuard makes a write lose to any pause, unlink or settings save
+// (all bump schedule_rev) committed since the snapshot. Args: zid, rev.
+const agendaGuard = ` AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = settings.account_id
+	AND a.status = 'connected' AND a.zulip_user_id = ? AND a.paused = 0 AND a.schedule_rev = ?)`
+
 // AgendaTick sends every agenda that is due. Only DB failures are returned.
 func (l *Linker) AgendaTick(ctx context.Context) error {
-	rows, err := l.St.DB.QueryContext(ctx, `SELECT a.id, a.zulip_user_id, s.agenda_minute, s.agenda_workdays, s.agenda_tz, s.agenda_sent
-		FROM settings s JOIN accounts a ON a.id = s.account_id
+	rows, err := l.St.DB.QueryContext(ctx, `SELECT a.id, a.zulip_user_id, a.schedule_rev, s.agenda_minute, s.agenda_workdays,
+		s.agenda_tz, s.agenda_sent FROM settings s JOIN accounts a ON a.id = s.account_id
 		WHERE s.agenda_minute IS NOT NULL AND a.status = 'connected' AND a.zulip_user_id IS NOT NULL AND a.paused = 0`)
 	if err != nil {
 		return err
@@ -130,7 +136,7 @@ func (l *Linker) AgendaTick(ctx context.Context) error {
 	var due []agendaRow
 	for rows.Next() {
 		var r agendaRow
-		if err := rows.Scan(&r.id, &r.zid, &r.minute, &r.workdays, &r.tz, &r.sent); err != nil {
+		if err := rows.Scan(&r.id, &r.zid, &r.rev, &r.minute, &r.workdays, &r.tz, &r.sent); err != nil {
 			rows.Close()
 			return err
 		}
@@ -154,8 +160,10 @@ func (l *Linker) agenda(ctx context.Context, r agendaRow) error {
 		if r.tz = l.zoneName(ctx, r.zid); r.tz == "" {
 			return nil // Zulip not reachable: next tick
 		}
-		if _, err := l.St.DB.ExecContext(ctx, `UPDATE settings SET agenda_tz = ? WHERE account_id = ?`, r.tz, r.id); err != nil {
-			return err
+		res, err := l.St.DB.ExecContext(ctx, `UPDATE settings SET agenda_tz = ? WHERE account_id = ? AND agenda_tz = ''`+agendaGuard,
+			r.tz, r.id, r.zid, r.rev)
+		if n, err2 := rowsAffected(res, err); err2 != nil || n == 0 {
+			return err2 // changed meanwhile: next tick
 		}
 	}
 	loc, err := time.LoadLocation(r.tz)
@@ -170,25 +178,22 @@ func (l *Linker) agenda(ctx context.Context, r agendaRow) error {
 		r.workdays && (wd == time.Saturday || wd == time.Sunday) {
 		return nil
 	}
-	// The claim: at most one agenda per local day, and a pause, unlink or
-	// settings change committed before it wins.
-	res, err := l.St.DB.ExecContext(ctx, `UPDATE settings SET agenda_sent = ?
-		WHERE account_id = ? AND agenda_sent = ? AND agenda_minute = ? AND agenda_workdays = ? AND agenda_tz = ?
-			AND EXISTS (SELECT 1 FROM accounts a
-			WHERE a.id = settings.account_id AND a.status = 'connected' AND a.zulip_user_id = ? AND a.paused = 0)`,
-		day, r.id, r.sent, r.minute, r.workdays, r.tz, r.zid)
+	ms, err := l.Meetings(ctx, r.id, now, time.Date(y, mo, d+1, 0, 0, 0, 0, loc))
 	if err != nil {
-		return err
+		slog.Warn("agenda: calendar not readable, retrying next tick", "account", r.id) // never the error text: it may carry event data
+		return nil
 	}
-	if n, err := res.RowsAffected(); err != nil || n == 0 {
+	// The claim, after the fetch so nothing slow sits between it and the
+	// send: at most one agenda per local day, and changes committed since
+	// the snapshot win.
+	res, err := l.St.DB.ExecContext(ctx, `UPDATE settings SET agenda_sent = ? WHERE account_id = ? AND agenda_sent = ? AND agenda_tz = ?`+agendaGuard,
+		day, r.id, r.sent, r.tz, r.zid, r.rev)
+	if n, err := rowsAffected(res, err); err != nil || n == 0 {
 		return err
 	}
 	// ponytail: a crash between the claim and the send loses that day's agenda; accepted, it is a convenience.
-	ms, err := l.Meetings(ctx, r.id, now, time.Date(y, mo, d+1, 0, 0, 0, 0, loc))
-	if err == nil {
-		// Once: a 429 releases the claim; the retry passes the next tick's checks.
-		_, err = l.Zulip.Once().SendDM(ctx, r.zid, agendaText(ms, l.PublicURL))
-	}
+	// Once: a 429 releases the claim; the retry passes the next tick's checks.
+	_, err = l.Zulip.Once().SendDM(ctx, r.zid, agendaText(ms, l.PublicURL))
 	if err != nil && !errors.Is(err, zulip.ErrRecipient) { // a deactivated recipient: the sender unlinks it
 		slog.Warn("agenda not sent, retrying next tick", "account", r.id) // never the error text: it may carry event data
 		_, err := l.St.DB.ExecContext(context.WithoutCancel(ctx), `UPDATE settings SET agenda_sent = ? WHERE account_id = ? AND agenda_sent = ?`,
@@ -197,10 +202,18 @@ func (l *Linker) agenda(ctx context.Context, r agendaRow) error {
 	}
 	// The user may have moved: tomorrow's agenda follows the profile.
 	if tz := l.zoneName(ctx, r.zid); tz != "" && tz != r.tz {
-		_, err := l.St.DB.ExecContext(ctx, `UPDATE settings SET agenda_tz = ? WHERE account_id = ?`, tz, r.id)
+		_, err := l.St.DB.ExecContext(ctx, `UPDATE settings SET agenda_tz = ? WHERE account_id = ? AND agenda_tz = ?`+agendaGuard,
+			tz, r.id, r.tz, r.zid, r.rev)
 		return err
 	}
 	return nil
+}
+
+func rowsAffected(res sql.Result, err error) (int64, error) {
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // zoneName is the user's Zulip profile timezone, "UTC" when unset or unknown

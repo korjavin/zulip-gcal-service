@@ -104,12 +104,16 @@ func TestDailyAgenda(t *testing.T) {
 	e.st.DB.Exec(`UPDATE accounts SET paused = 1 WHERE id = 'P'`)
 	var now time.Time
 	e.l.Now = func() time.Time { return now }
-	failing := false
+	failing, saveDuring := false, false
 	var asked []string
 	e.l.Meetings = func(_ context.Context, id string, from, to time.Time) ([]poller.Payload, error) {
 		asked = append(asked, fmt.Sprintf("%s %s %s", id, from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339)))
 		if failing {
 			return nil, fmt.Errorf("boom")
+		}
+		if saveDuring { // a settings save lands while Google is being read
+			saveDuring = false
+			e.st.DB.Exec(`UPDATE accounts SET schedule_rev = schedule_rev + 1 WHERE id = ?`, id)
 		}
 		s := from.Add(time.Hour)
 		return []poller.Payload{{Title: "Plan_ning", Start: s}, {Title: "Review", Start: s.Add(time.Hour)}}, nil
@@ -140,13 +144,17 @@ func TestDailyAgenda(t *testing.T) {
 		t.Fatalf("second agenda the same day: %v", d)
 	}
 
-	// Thu: the first try fails and is retried on the next tick.
+	// Thu: the first try fails, the second loses to a concurrent settings
+	// save; the next tick sends it.
 	failing = true
 	if d := tick("2030-01-16T19:00:00Z"); len(d) != 0 {
 		t.Fatalf("failed: %v", d)
 	}
-	failing = false
-	if d := tick("2030-01-16T19:00:30Z"); len(d) != 1 {
+	failing, saveDuring = false, true
+	if d := tick("2030-01-16T19:00:30Z"); len(d) != 0 {
+		t.Fatalf("sent despite a save: %v", d)
+	}
+	if d := tick("2030-01-16T19:01:00Z"); len(d) != 1 {
 		t.Fatalf("retry: %v", d)
 	}
 	// Fri: the service was down until an hour after; Sat: workdays only.
