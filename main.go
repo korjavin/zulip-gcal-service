@@ -19,6 +19,7 @@ import (
 	"github.com/korjavin/zulip-gcal-service/internal/lifecycle"
 	"github.com/korjavin/zulip-gcal-service/internal/link"
 	"github.com/korjavin/zulip-gcal-service/internal/poller"
+	"github.com/korjavin/zulip-gcal-service/internal/sender"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
 	"github.com/korjavin/zulip-gcal-service/internal/zulip"
 )
@@ -66,6 +67,7 @@ func run() error {
 	pl := poller.New(st, ops.TokenSource, cfg.PollInterval)
 	ops.Poll = pl.Trigger
 	go pl.Run(ctx)
+	go sender.New(st, zc).Run(ctx)
 	var bot *zulip.Bot
 	lk := &link.Linker{St: st, Zulip: zc, Account: au.Account, BotHealthy: func() bool { return bot.Healthy() },
 		BotID: botID, PublicURL: cfg.PublicURL, ZulipSite: cfg.ZulipSite, Poll: pl.Trigger}
@@ -77,7 +79,7 @@ func run() error {
 	go func() { errc <- srv.ListenAndServe() }()
 	slog.Info("listening", "addr", srv.Addr)
 
-	// The poller and bot loops stop via ctx.
+	// The poller, sender and bot loops stop via ctx.
 	select {
 	case err := <-errc:
 		return err

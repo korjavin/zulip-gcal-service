@@ -348,6 +348,22 @@ func TestPollKeepsPendingFireAt(t *testing.T) {
 	e.check(map[string]string{"a|10": "pending 09:52 Sync a"}) // waiting for a Zulip retry: due time kept
 }
 
+func TestPollCancelDeletesSending(t *testing.T) {
+	// A row mid-send whose meeting was cancelled is deleted, so a failed
+	// send cannot put it back to pending; a still-desired one is left alone.
+	e := newEnv(t)
+	e.set("primary", page(ev("a", now.Add(5*time.Minute), mins(10))))
+	e.set("team", page())
+	for _, k := range []string{"acc|a@google.com|2026-10-06T10:00:00Z|10", "acc|gone@google.com|2026-10-06T10:00:00Z|10"} {
+		e.exec(`INSERT INTO reminders (key, account_id, fire_at, event_start, payload, state, updated_at)
+			VALUES (?, 'acc', ?, 0, '{}', 'sending', 0)`, k, now.Unix())
+	}
+	if err := e.p.Poll(context.Background(), "acc"); err != nil {
+		t.Fatal(err)
+	}
+	e.check(map[string]string{"a|10": "sending 09:55 "})
+}
+
 func TestPollStartedKeepsPending(t *testing.T) {
 	// 0-min reminder, meeting 10:00, poll 10:00:05: the pending row survives for the sender.
 	e := newEnv(t)

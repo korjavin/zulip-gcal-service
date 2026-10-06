@@ -234,7 +234,7 @@ user's list.
 * desired key not in the table → insert `pending` (or `skipped`, above);
 * existing `pending` row → update its payload (title, place, link may change),
   keep its `fire_at` — a row waiting for a Zulip retry keeps its due time;
-* `pending` row not desired any more → delete;
+* `pending` (or `sending`) row not desired any more → delete;
 * rows in any other state are history and never change.
 
 ## 5. Delivery
