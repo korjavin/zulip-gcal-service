@@ -146,7 +146,8 @@ func (p *Page) calendarList(ctx context.Context, accountID string) ([]calendar, 
 	if base == "" {
 		base = "https://www.googleapis.com/calendar/v3"
 	}
-	q := url.Values{"maxResults": {"250"}, "fields": {"nextPageToken,items(id,summary,summaryOverride,backgroundColor,accessRole,primary)"}}
+	q := url.Values{"maxResults": {"250"}, "showHidden": {"true"}, // a hidden calendar is still watched
+		"fields": {"nextPageToken,items(id,summary,summaryOverride,backgroundColor,accessRole,primary)"}}
 	var out []calendar
 	for {
 		req, err := http.NewRequestWithContext(ctx, "GET", base+"/users/me/calendarList?"+q.Encode(), nil)

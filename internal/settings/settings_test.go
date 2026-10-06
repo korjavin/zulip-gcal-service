@@ -41,7 +41,7 @@ func newEnv(t *testing.T) *env {
 	e.exec(`INSERT INTO settings (account_id, lead_minutes) VALUES (?, 10)`, acct)
 
 	g := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if e.googleDown || r.URL.Path != "/users/me/calendarList" || r.Header.Get("Authorization") != "Bearer access" {
+		if e.googleDown || r.URL.Query().Get("showHidden") != "true" || r.URL.Path != "/users/me/calendarList" || r.Header.Get("Authorization") != "Bearer access" {
 			http.Error(w, "down", http.StatusServiceUnavailable)
 			return
 		}
