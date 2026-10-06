@@ -16,6 +16,7 @@ import (
 
 	"github.com/korjavin/zulip-gcal-service/internal/auth"
 	"github.com/korjavin/zulip-gcal-service/internal/config"
+	"github.com/korjavin/zulip-gcal-service/internal/lifecycle"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
 	"github.com/korjavin/zulip-gcal-service/internal/zulip"
 )
@@ -60,7 +61,9 @@ func run() error {
 	go bot.Run(ctx)
 
 	mux := routes(st)
-	auth.New(cfg, st, auth.Google).Register(mux)
+	au := auth.New(cfg, st, auth.Google)
+	au.Register(mux)
+	lifecycle.New(cfg, st, zc).Register(mux, au.Account)
 	srv := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
