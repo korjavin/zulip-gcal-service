@@ -76,6 +76,7 @@ type User struct {
 	FullName string `json:"full_name"`
 	IsActive bool   `json:"is_active"`
 	IsBot    bool   `json:"is_bot"`
+	Timezone string `json:"timezone"` // IANA name, may be empty
 }
 
 // CheckServer refuses servers older than MinFeatureLevel and returns the
@@ -132,6 +133,17 @@ func (c *Client) user(ctx context.Context, path string) (User, error) {
 		return User{}, ErrNotFound
 	}
 	return *r.User, nil
+}
+
+// UserLocation is the user's profile timezone, UTC when it cannot be read.
+// Shared by every feature that needs the user's local day.
+func (c *Client) UserLocation(ctx context.Context, id int64) *time.Location {
+	if u, err := c.UserByID(ctx, id); err == nil && u.Timezone != "" {
+		if loc, err := time.LoadLocation(u.Timezone); err == nil {
+			return loc
+		}
+	}
+	return time.UTC
 }
 
 // SendDM sends a direct message and returns its message id. A recipient that
