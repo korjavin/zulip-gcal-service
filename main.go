@@ -67,7 +67,8 @@ func run() error {
 	pl := poller.New(st, ops.TokenSource, cfg.PollInterval)
 	ops.Poll = pl.Trigger
 	go pl.Run(ctx)
-	go sender.New(st, zc).Run(ctx)
+	senderDone := make(chan struct{}) // joined at shutdown: its last outcome write lands before the DB closes
+	go func() { sender.New(st, zc).Run(ctx); close(senderDone) }()
 	var bot *zulip.Bot
 	lk := &link.Linker{St: st, Zulip: zc, Account: au.Account, BotHealthy: func() bool { return bot.Healthy() },
 		BotID: botID, PublicURL: cfg.PublicURL, ZulipSite: cfg.ZulipSite, Poll: pl.Trigger}
@@ -91,6 +92,7 @@ func run() error {
 	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	<-senderDone
 	return nil
 }
 
