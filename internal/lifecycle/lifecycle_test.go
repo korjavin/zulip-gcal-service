@@ -239,7 +239,8 @@ func TestDisconnect(t *testing.T) {
 	e.account("a", "rt", true)
 	e.account("b", "rt-b", true)
 	rev := e.rev("a")
-	if _, err := e.o.TokenSource(context.Background(), "a"); err != nil {
+	issued, err := e.o.TokenSource(context.Background(), "a")
+	if err != nil {
 		t.Fatal(err)
 	}
 	var atRevoke [2]int
@@ -271,6 +272,14 @@ func TestDisconnect(t *testing.T) {
 	}
 	if _, err := e.o.TokenSource(context.Background(), "a"); !errors.Is(err, ErrNoAccess) {
 		t.Fatal(err)
+	}
+	// A source handed out before disconnect never refreshes again, even
+	// though Google still accepts the token (revocation is best effort).
+	e.mu.Lock()
+	before := e.refreshs
+	e.mu.Unlock()
+	if _, err := issued.Token(); !errors.Is(err, ErrNoAccess) || e.refreshs != before {
+		t.Fatalf("issued source after disconnect: %v", err)
 	}
 	if _, err := e.o.Disconnect(context.Background(), "a"); !errors.Is(err, ErrNoAccess) {
 		t.Fatalf("second disconnect: %v", err)

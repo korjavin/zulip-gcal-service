@@ -169,6 +169,7 @@ func TestSendingResetOnStartup(t *testing.T) {
 	id := addAccount(t, s, "a", 1)
 	exec(t, s, `UPDATE reminders SET state = 'sending'`)
 	exec(t, s, `INSERT INTO reminders (key, account_id, fire_at, event_start, payload, state, updated_at) VALUES ('sent1', ?, 0, 0, '{}', 'sent', 0)`, id)
+	exec(t, s, `INSERT INTO tombstones (google_sub, created_at, revoking) VALUES ('gone', 0, 1)`)
 	s.Close()
 	s = open(t, path)
 	if n := count(t, s, `SELECT count(*) FROM reminders WHERE state = 'pending'`); n != 1 {
@@ -176,5 +177,8 @@ func TestSendingResetOnStartup(t *testing.T) {
 	}
 	if n := count(t, s, `SELECT count(*) FROM reminders WHERE state = 'sent'`); n != 1 {
 		t.Fatalf("sent rows must not change, got %d", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM tombstones WHERE revoking = 1`); n != 0 {
+		t.Fatal("a crashed revocation must not block sign-in after restart")
 	}
 }

@@ -48,7 +48,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	// Possible duplicate, never a loss (design §3.1).
-	if _, err := db.ExecContext(ctx, `UPDATE reminders SET state = 'pending' WHERE state = 'sending'`); err != nil {
+	// No revocation survives a restart; a tombstone left "revoking" by a crash
+	// would otherwise block that user's sign-in (design §3.3).
+	if _, err := db.ExecContext(ctx, `UPDATE reminders SET state = 'pending' WHERE state = 'sending';
+		UPDATE tombstones SET revoking = 0 WHERE revoking = 1`); err != nil {
 		db.Close()
 		return nil, err
 	}

@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -46,12 +47,7 @@ type Ops struct {
 	Poll func(accountID string)
 
 	mu    sync.Mutex
-	cache map[string]cached // account id -> token source for one token_rev
-}
-
-type cached struct {
-	rev int64
-	ts  oauth2.TokenSource
+	cache map[string]*guarded // account id -> token source of its current token_rev
 }
 
 func New(cfg *config.Config, st *store.Store, zc *zulip.Client) *Ops {
@@ -64,7 +60,7 @@ func New(cfg *config.Config, st *store.Store, zc *zulip.Client) *Ops {
 		},
 		httpCtx:   context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Timeout: 30 * time.Second}),
 		revokeURL: "https://oauth2.googleapis.com/revoke",
-		cache:     map[string]cached{},
+		cache:     map[string]*guarded{},
 	}
 }
 
@@ -85,27 +81,33 @@ func (o *Ops) TokenSource(ctx context.Context, accountID string) (oauth2.TokenSo
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if c, ok := o.cache[accountID]; ok && c.rev == rev {
-		return c.ts, nil
+	old := o.cache[accountID]
+	if old != nil && old.rev == rev {
+		return old, nil
 	}
 	rt, err := o.secrets.Decrypt(enc)
 	if err != nil {
 		return nil, err
 	}
+	o.killLocked(accountID)
 	ts := &guarded{o: o, id: accountID, rev: rev,
 		ts: o.oauth.TokenSource(o.httpCtx, &oauth2.Token{RefreshToken: string(rt)})}
-	o.cache[accountID] = cached{rev, ts}
+	o.cache[accountID] = ts
 	return ts, nil
 }
 
 type guarded struct {
-	o   *Ops
-	id  string
-	rev int64
-	ts  oauth2.TokenSource
+	o    *Ops
+	id   string
+	rev  int64
+	ts   oauth2.TokenSource
+	dead atomic.Bool // superseded, disconnected or lost: never hand out a token again
 }
 
 func (g *guarded) Token() (*oauth2.Token, error) {
+	if g.dead.Load() {
+		return nil, ErrNoAccess
+	}
 	t, err := g.ts.Token()
 	var re *oauth2.RetrieveError
 	if errors.As(err, &re) && re.ErrorCode == "invalid_grant" {
@@ -119,10 +121,18 @@ func (g *guarded) Token() (*oauth2.Token, error) {
 	return t, err
 }
 
+// forget invalidates every token source handed out for the account.
 func (o *Ops) forget(accountID string) {
 	o.mu.Lock()
-	delete(o.cache, accountID)
+	o.killLocked(accountID)
 	o.mu.Unlock()
+}
+
+func (o *Ops) killLocked(accountID string) {
+	if g := o.cache[accountID]; g != nil {
+		g.dead.Store(true)
+		delete(o.cache, accountID)
+	}
 }
 
 const cancelReminders = `DELETE FROM reminders WHERE account_id = ? AND state IN ('pending', 'sending')`
