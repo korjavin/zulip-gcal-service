@@ -18,6 +18,7 @@ import (
 	"github.com/korjavin/zulip-gcal-service/internal/config"
 	"github.com/korjavin/zulip-gcal-service/internal/lifecycle"
 	"github.com/korjavin/zulip-gcal-service/internal/link"
+	"github.com/korjavin/zulip-gcal-service/internal/poller"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
 	"github.com/korjavin/zulip-gcal-service/internal/zulip"
 )
@@ -60,11 +61,14 @@ func run() error {
 	mux := routes(st)
 	au := auth.New(cfg, st, auth.Google)
 	au.Register(mux)
-	lifecycle.New(cfg, st, zc).Register(mux, au.Account)
+	ops := lifecycle.New(cfg, st, zc)
+	ops.Register(mux, au.Account)
+	pl := poller.New(st, ops.TokenSource, cfg.PollInterval)
+	ops.Poll = pl.Trigger
+	go pl.Run(ctx)
 	var bot *zulip.Bot
-	// ponytail: Poll stays nil until the poller (zgc-lvo.1) exists.
 	lk := &link.Linker{St: st, Zulip: zc, Account: au.Account, BotHealthy: func() bool { return bot.Healthy() },
-		BotID: botID, PublicURL: cfg.PublicURL, ZulipSite: cfg.ZulipSite}
+		BotID: botID, PublicURL: cfg.PublicURL, ZulipSite: cfg.ZulipSite, Poll: pl.Trigger}
 	lk.Register(mux)
 	bot = zulip.NewBot(zc, st, botID, lk.HandleDM)
 	go bot.Run(ctx)
@@ -73,8 +77,7 @@ func run() error {
 	go func() { errc <- srv.ListenAndServe() }()
 	slog.Info("listening", "addr", srv.Addr)
 
-	// ponytail: only the web server so far; poller/sender/bot loops join this
-	// shutdown via ctx when they exist.
+	// The poller and bot loops stop via ctx.
 	select {
 	case err := <-errc:
 		return err

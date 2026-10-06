@@ -43,8 +43,7 @@ type Ops struct {
 	httpCtx   context.Context // carries the HTTP client for token refreshes
 	revokeURL string
 
-	// Poll asks for an immediate poll of an account (resume). nil = none.
-	// ponytail: unset until the poller exists (zgc-lvo.1).
+	// Poll asks for an immediate poll of an account (resume); poller.Trigger. nil = none.
 	Poll func(accountID string)
 
 	mu    sync.Mutex

@@ -36,7 +36,7 @@ type Linker struct {
 	BotID      int64
 	PublicURL  string
 	ZulipSite  string
-	Poll       func(accountID string) // immediate poll after linking; nil = none yet
+	Poll       func(accountID string) // immediate poll after linking; nil = none
 
 	wrong map[int64][]time.Time // ponytail: only touched by the sequential bot loop, no lock
 }
