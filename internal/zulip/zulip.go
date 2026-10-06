@@ -195,7 +195,12 @@ func (c *Client) once(ctx context.Context, method, path string, params url.Value
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		// *url.Error carries the URL, i.e. user e-mails: never return it.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return fmt.Errorf("zulip: %s %s: %w", method, endpoint(path), err)
 	}
 	defer resp.Body.Close()
 	// No size cap: ZULIP_SITE is admin-configured, and a capped /events
@@ -219,8 +224,16 @@ func (c *Client) once(ctx context.Context, method, path string, params url.Value
 	}
 	if out != nil {
 		if err := json.Unmarshal(raw, out); err != nil {
-			return fmt.Errorf("zulip: malformed %s response: %w", path, err)
+			return fmt.Errorf("zulip: malformed %s response: %w", endpoint(path), err)
 		}
 	}
 	return nil
+}
+
+// endpoint is path without user data, for error messages (they get logged).
+func endpoint(path string) string {
+	if strings.HasPrefix(path, "users/") && path != "users/me" {
+		return "users/{user}"
+	}
+	return path
 }
