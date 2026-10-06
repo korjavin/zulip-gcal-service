@@ -42,6 +42,9 @@ type Linker struct {
 	Now        func() time.Time                                                                          // clock for "today"; nil = time.Now
 	Meetings   func(ctx context.Context, accountID string, from, to time.Time) ([]poller.Payload, error) // live calendar read for "today"
 	Ops        *lifecycle.Ops                                                                            // bot commands stop/start/disconnect
+	// CalendarZone is the primary Google calendar's timezone (poller.TimeZone),
+	// the agenda's fallback when the Zulip profile has none; nil = UTC.
+	CalendarZone func(ctx context.Context, accountID string) (string, error)
 
 	wrong map[int64][]time.Time // ponytail: only touched by the sequential bot loop, no lock
 }

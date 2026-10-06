@@ -187,9 +187,10 @@ One implementation each, used by the web pages and by bot commands alike.
   reconnect link.
 * **Daily agenda** (opt-in on the settings page): at the chosen local time,
   optionally Monday to Friday only, one DM listing the meetings still ahead
-  that day (read live, as `today`). Local means the Zulip profile timezone
-  (UTC if unset), stored in settings and re-read after each agenda and on
-  every settings save. At most one per local day: the day is claimed in one
+  that day (read live, as `today`). Local means the Zulip profile timezone,
+  else the primary Google calendar's `timeZone`, else UTC (a Zulip or Google
+  error stores nothing; the next tick asks again), stored in settings and
+  re-read after each agenda and on every settings save. At most one per local day: the day is claimed in one
   conditional write before the send and released on failure, so the next
   tick retries; an agenda more than an hour late (service down) is skipped.
   Paused or unlinked accounts get none.

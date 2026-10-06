@@ -94,8 +94,8 @@ func (l *Linker) now() time.Time {
 }
 
 // Daily agenda (opt-in on /settings): at the user's chosen local time, a DM
-// listing the meetings still ahead that day. The local day is the Zulip
-// profile timezone, stored in settings and refreshed after each send.
+// listing the meetings still ahead that day. The local day is in zoneName's
+// timezone, stored in settings and refreshed after each send.
 
 const agendaLate = time.Hour // an agenda missed (service down) is still sent this long after its time
 
@@ -157,8 +157,8 @@ func (l *Linker) AgendaTick(ctx context.Context) error {
 
 func (l *Linker) agenda(ctx context.Context, r agendaRow) error {
 	if r.tz == "" {
-		if r.tz = l.zoneName(ctx, r.zid); r.tz == "" {
-			return nil // Zulip not reachable: next tick
+		if r.tz = l.zoneName(ctx, r.zid, r.id); r.tz == "" {
+			return nil // Zulip or Google not reachable: next tick
 		}
 		res, err := l.St.DB.ExecContext(ctx, `UPDATE settings SET agenda_tz = ? WHERE account_id = ? AND agenda_tz = ''`+agendaGuard,
 			r.tz, r.id, r.zid, r.rev)
@@ -201,7 +201,7 @@ func (l *Linker) agenda(ctx context.Context, r agendaRow) error {
 		return err
 	}
 	// The user may have moved: tomorrow's agenda follows the profile.
-	if tz := l.zoneName(ctx, r.zid); tz != "" && tz != r.tz {
+	if tz := l.zoneName(ctx, r.zid, r.id); tz != "" && tz != r.tz {
 		_, err := l.St.DB.ExecContext(ctx, `UPDATE settings SET agenda_tz = ? WHERE account_id = ? AND agenda_tz = ?`+agendaGuard,
 			tz, r.id, r.tz, r.zid, r.rev)
 		return err
@@ -216,10 +216,11 @@ func rowsAffected(res sql.Result, err error) (int64, error) {
 	return res.RowsAffected()
 }
 
-// zoneName is the user's Zulip profile timezone, "UTC" when unset or unknown
-// here, "" when Zulip cannot be asked. Unlike UserLocation, a transient error
-// must not turn the stored zone into UTC.
-func (l *Linker) zoneName(ctx context.Context, zid int64) string {
+// zoneName is the user's Zulip profile timezone, else their primary Google
+// calendar's, else "UTC"; "" when Zulip or Google cannot be asked. Unlike
+// UserLocation, a transient error must never store a fallback.
+func (l *Linker) zoneName(ctx context.Context, zid int64, accountID string) string {
+	valid := func(tz string) bool { _, err := time.LoadLocation(tz); return tz != "" && err == nil }
 	u, err := l.Zulip.UserByID(ctx, zid)
 	if errors.Is(err, zulip.ErrNotFound) {
 		return "UTC" // deactivated: the send fails and the sender unlinks
@@ -227,10 +228,19 @@ func (l *Linker) zoneName(ctx context.Context, zid int64) string {
 	if err != nil {
 		return ""
 	}
-	if _, err := time.LoadLocation(u.Timezone); err != nil || u.Timezone == "" {
-		return "UTC"
+	if valid(u.Timezone) {
+		return u.Timezone
 	}
-	return u.Timezone
+	if l.CalendarZone != nil {
+		tz, err := l.CalendarZone(ctx, accountID)
+		if err != nil {
+			return "" // never the error text
+		}
+		if valid(tz) {
+			return tz
+		}
+	}
+	return "UTC"
 }
 
 func agendaText(ms []poller.Payload, publicURL string) string {

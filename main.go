@@ -73,7 +73,7 @@ func run() error {
 	go func() { sender.New(st, zc).Run(ctx); close(senderDone) }()
 	var bot *zulip.Bot
 	lk := &link.Linker{St: st, Zulip: zc, Account: au.Account, BotHealthy: func() bool { return bot.Healthy() },
-		BotID: botID, PublicURL: cfg.PublicURL, ZulipSite: cfg.ZulipSite, Poll: pl.Trigger, Meetings: pl.Meetings, Ops: ops}
+		BotID: botID, PublicURL: cfg.PublicURL, ZulipSite: cfg.ZulipSite, Poll: pl.Trigger, Meetings: pl.Meetings, CalendarZone: pl.TimeZone, Ops: ops}
 	lk.Register(mux)
 	agendaDone := make(chan struct{}) // joined like the sender: a released claim lands before the DB closes
 	go func() { lk.RunAgenda(ctx); close(agendaDone) }()

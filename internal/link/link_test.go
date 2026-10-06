@@ -34,6 +34,8 @@ type env struct {
 	polled  []string
 	revoked []string
 	msgID   int64
+
+	failSends int // the next n POST /messages fail with HTTP 500
 }
 
 // Fake Zulip: users 1 (a@x), 2 (b@x), 3 (c@x); hidden@x is not found.
@@ -66,8 +68,13 @@ func newEnv(t *testing.T) *env {
 	})
 	mux.HandleFunc("POST /api/v1/messages", func(w http.ResponseWriter, r *http.Request) {
 		e.mu.Lock()
+		defer e.mu.Unlock()
+		if e.failSends > 0 {
+			e.failSends--
+			w.WriteHeader(500)
+			return
+		}
 		e.dms = append(e.dms, sent{r.FormValue("to"), r.FormValue("content")})
-		e.mu.Unlock()
 		fmt.Fprint(w, `{"result":"success","id":42}`)
 	})
 	mux.HandleFunc("POST /revoke", func(w http.ResponseWriter, r *http.Request) {
