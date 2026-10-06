@@ -69,7 +69,8 @@ func (l *Linker) runCommand(ctx context.Context, m zulip.Message, cmd string) er
 		return nil // older than the sender's current link: a replayed command must not hit it
 	}
 	// mark records the receipt in the operation's own write and checks the
-	// account resolved above is still this sender's current link.
+	// account resolved above is still this sender's current link, in the
+	// status the reply was chosen by (lost access meanwhile: look again).
 	mark := func(tx *sql.Tx) error {
 		fresh, err := store.MarkHandled(ctx, tx, m.ID, time.Now())
 		if err != nil {
@@ -79,8 +80,8 @@ func (l *Linker) runCommand(ctx context.Context, m zulip.Message, cmd string) er
 			return errHandled
 		}
 		var same int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM accounts WHERE id = ? AND zulip_user_id = ? AND coalesce(linked_at, 0) = ?`,
-			id, m.SenderID, linkedAt).Scan(&same); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM accounts WHERE id = ? AND zulip_user_id = ? AND coalesce(linked_at, 0) = ? AND status = ?`,
+			id, m.SenderID, linkedAt, status).Scan(&same); err != nil {
 			return err
 		}
 		if same == 0 {
