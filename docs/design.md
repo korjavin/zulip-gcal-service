@@ -36,8 +36,12 @@ send a test reminder.
 Without leaving Zulip, the user can DM the bot:
 
 * `stop` — pause reminders (calendar access kept); `start` resumes.
-* `disconnect` — revoke the Google access and delete everything stored about
-  the user, refresh token included. Reconnecting is one click on the page.
+* `disconnect` — delete everything this service stores about the user,
+  refresh token included, and revoke the Google access. Signing in again on
+  the page reconnects.
+
+The bot always replies; no reply within a minute → send again or use the
+website.
 
 ## 2. What an admin does (once)
 
@@ -70,13 +74,13 @@ Without leaving Zulip, the user can DM the bot:
 ## 3. Architecture
 
 One Go binary, one SQLite file (`modernc.org/sqlite`, no CGO), no other
-services.
+services, exactly one running instance.
 
 ```
 browser ──HTTPS──> [web]  Google sign-in, settings pages
                      │
                   [SQLite]  accounts, encrypted refresh tokens, settings,
-                     │      reminders (pending/sent/suppressed/expired), link codes
+                     │      reminders, link codes, handled bot messages
                      │
  Google Calendar <─[poller]  every POLL_INTERVAL per account: events in the
                      │       next 26h → reconcile reminders
@@ -84,89 +88,156 @@ browser ──HTTPS──> [web]  Google sign-in, settings pages
                   [sender]   every 30s: due reminders → Zulip DM
                      │
  Zulip <──────────[bot]      send DMs; long-poll the bot's event queue for
-                             incoming one-to-one DMs (link codes, later commands)
+                             new one-to-one DMs (link codes, commands)
 ```
 
-* **Accounts** have a random, never-reused id (not an SQLite rowid) and a
-  `generation` counter bumped on disconnect/pause/settings change.
-* **Per-account serialization**: poll, reconcile and settings changes for one
-  account run under that account's lock. A poll result is discarded if the
-  generation changed while it was fetching. No DB write transaction is held
-  across Google or Zulip HTTP calls.
-* **Tokens at rest**: Google refresh tokens AES-256-GCM encrypted with a key
-  derived from `APP_SECRET`. Never logged. Access tokens only in memory.
-* **Sessions**: signed `HttpOnly; Secure; SameSite=Lax` cookie with account id
-  + generation, checked against the DB on every request (disconnect
-  invalidates every browser). Settings forms carry a CSRF token.
+### 3.1 Concurrency: no locks, conditional writes
+
+All HTTP (Google, Zulip) happens outside DB transactions. Every state change
+is a short SQLite write whose `WHERE` clause checks the state it was based on;
+SQLite serializes writers, so that check is the whole concurrency story.
+
+* `accounts.schedule_rev` — bumped by anything that changes which reminders an
+  account should have: settings save, pause/resume, link/unlink. A poll reads
+  it before fetching and commits only `WHERE schedule_rev = <read value>`;
+  otherwise its result is thrown away and the account is re-polled.
+* `accounts.token_rev` — bumped when a new refresh token is stored. A refresh
+  failure marks the account disconnected only `WHERE token_rev = <rev used>`,
+  so a stale failure never kills a newer grant.
+* Schedule-affecting changes (save, pause, link, unlink) delete the account's
+  `pending` reminders in the same write, so they apply even while Google is
+  unreachable; the next poll rebuilds them.
+* At most one poll per account in flight (in-memory set); an on-demand poll
+  for an account already being polled is coalesced into one re-poll.
+* The sender claims a reminder with one conditional update
+  (`pending → sending` only if the row is still pending and its account is
+  connected, linked and not paused), then sends. Anything that commits before
+  the claim wins; a DM already claimed may still go out after a `stop`. On
+  startup leftover `sending` rows go back to `pending` (possible duplicate,
+  never a loss).
+
+### 3.2 Accounts, sessions, tokens
+
+* Accounts have a random, never-reused id (not an SQLite rowid), keyed by
+  Google `sub`.
+* **Session**: signed `HttpOnly; Secure; SameSite=Lax` cookie with the account
+  id and expiry, checked on every request that the account still exists.
+  Deleting the account logs out every browser; settings changes and pause do
+  not. A disconnected (lost Google access) account still has a session, so
+  its page can show **Reconnect**. Settings forms carry a CSRF token.
+* **Tokens at rest**: refresh tokens AES-256-GCM encrypted with a key derived
+  from `APP_SECRET`. Never logged. Access tokens only in memory, cached per
+  account by `token_rev`.
 * **OAuth**: authorization-code flow, `access_type=offline`, `state` + PKCE.
   `/login` starts without forced consent; the callback learns the Google `sub`,
-  and if this account has no usable refresh token (new, or the stored one is
-  dead), it retries once with `prompt=consent`. A callback that fails (missing
+  and if that account has no usable refresh token (new, or the stored one is
+  dead), it retries once with `prompt=consent`. A failed callback (missing
   calendar scope, no refresh token after the retry) never overwrites a working
   stored connection. Granted scopes are checked in the token response.
-* **Identity**: accounts are keyed by Google `sub`. The Google e-mail is used
-  for Zulip auto-match only when `email_verified` and authoritative (`hd`
-  present, or a `gmail.com` address); otherwise the DM-code path.
-* **Link codes**: 6 chars from an unambiguous alphabet, 15 min TTL, at most
-  one live code per account, consumed atomically, all of the account's codes
-  invalidated on any successful link. Accepted only in a one-to-one DM
-  (bot + one human sender), trimmed exact match, raw content
-  (`apply_markdown=false`). Wrong attempts are throttled per sender. A code
-  only links an unlinked account. The event queue is not durable: if the bot
-  loop is down, the linking page says so and the user just resends the code.
-* **Disconnect** revokes the token at Google and deletes the account's rows.
-  `invalid_grant` on refresh → the account is marked disconnected and gets one
-  DM with the reconnect link.
+* **Identity**: the Google e-mail is used for Zulip auto-match only when
+  `email_verified` and authoritative (`hd` present, or a `gmail.com` address);
+  otherwise the DM-code path.
+* **Google project**: use a dedicated Cloud project for this service —
+  revoking a token revokes the user's grant to the whole OAuth client.
+
+### 3.3 Lifecycle operations
+
+One implementation each, used by the web pages and by bot commands alike.
+
+* **Pause / resume**: flip `paused`, bump `schedule_rev`, delete pending
+  reminders; resume also triggers a poll. Repeating the current state is a
+  no-op (no bump, no poll).
+* **Disconnect**: one write deletes the account and all its rows (refresh
+  token included) — from then on nothing can use it. Then a best-effort
+  revoke at Google with the token held in memory, 5 s timeout; the reply says
+  whether revocation was confirmed. "All your data" means this service's
+  stored data; Zulip DMs already sent stay in Zulip.
+* **Lost access** (`invalid_grant`): status `disconnected` (guarded by
+  `token_rev`), pending reminders deleted, one DM with the reconnect link.
+  Signing in again re-activates the same account.
+
+### 3.4 Zulip bot input
+
+* Only new `message` events (never `update_message`: editing a message never
+  runs a command). Only one-to-one DMs: the bot plus one human sender. The
+  bot's own messages are ignored. Raw content (`apply_markdown=false`).
+* Each handled message id is recorded (`handled_messages`, kept 7 days), so a
+  replayed event is never executed twice. Messages older than the sender's
+  current link are ignored, so a replayed `disconnect` cannot hit a freshly
+  reconnected account.
+* Commands are the whole trimmed message, case-insensitive, optional leading
+  `/`: `stop`, `start`, `disconnect`, `help`. Anything else gets help.
+  `start` on a disconnected account replies with the reconnect link.
+* **Link codes**: 6 chars, unambiguous alphabet, 15 min TTL, at most one live
+  code per account, consumed atomically, all of the account's codes deleted
+  on any successful link, only links an unlinked account, wrong attempts
+  throttled per sender. Checked before commands.
+* The event queue is not durable: a DM sent while the service is down can be
+  missed. Every command and code gets a reply; the help text says "no reply
+  within a minute → send again or use the website".
 
 ## 4. Which events produce a reminder
 
 For each watched calendar (default: primary), `events.list` with
 `singleEvents=true`, `timeMin=now`, `timeMax=now+26h`, every page
 (`nextPageToken`). The response also carries the calendar's
-`defaultReminders`. An occurrence gets reminders unless:
+`defaultReminders`.
 
-* it is cancelled;
+**Snapshot is all-or-nothing per account**: if any watched calendar or page
+fails, the poll changes nothing and the previous reminders stay. Only a
+complete snapshot is reconciled.
+
+An occurrence gets reminders unless:
+
+* it is cancelled or has started;
 * it is all-day (no reminders for all-day events in this version);
 * the user declined it (their `attendees[].self` is `declined`) — setting, on
-  by default;
-* the user paused reminders.
+  by default.
 
 **Timing** — setting with two modes:
 
 * *As in Google Calendar* (default): the event's own reminder offsets
   (`reminders.overrides`, or the calendar's `defaultReminders` when
-  `useDefault=true`), any method, duplicates merged. An event explicitly set
-  to no reminders gets none. Offsets over 24 h are ignored (documented).
-* *N minutes before*: one reminder at `DEFAULT_LEAD_MINUTES` or the user's
-  choice (1–60).
+  `useDefault=true`), any method, duplicates merged, 0–1440 minutes. An event
+  explicitly set to no reminders gets none.
+* *N minutes before*: one reminder at the user's choice (1–60, default
+  `DEFAULT_LEAD_MINUTES`).
 
-**Late discovery**: a reminder whose fire time has already passed when it is
-first computed (meeting created at short notice, service restart, Google
-outage) is sent immediately, as long as the meeting has not started. Once the
-meeting has started, an unsent reminder becomes `expired`.
+**Late discovery and catch-up** (meeting created at short notice, first
+connect, resume, restart, Google outage): for each occurrence, offsets whose
+fire time is already past collapse into at most **one** immediate reminder,
+and only if the meeting starts within 60 minutes; the other overdue offsets
+are recorded as `skipped`. So connecting never floods anyone, and a meeting
+created 5 minutes ahead still gets its DM.
 
-**Identity and reconciliation**: the reminder key is
-`account | iCalUID | occurrence start (UTC) | offset`, so the same meeting
-seen in two watched calendars produces one DM. Each poll builds the set of
-keys from every calendar that was fetched completely and successfully, and
-reconciles:
+**Keys**: `account | iCalUID | occurrence start (UTC) | offset`. The same
+meeting in two watched calendars is one reminder; when the copies differ, the
+payload comes from the primary calendar, else the first calendar in the
+user's list.
 
-* new keys → `pending` rows;
-* `pending` rows whose key is gone, and whose source calendars were all
-  fetched successfully this poll → deleted (cancelled, moved, filtered);
-* a calendar that failed (5xx, quota, a failed page) keeps its previous rows
-  untouched;
-* rows that are no longer `pending` are never touched.
+**Reconcile** (one write, guarded by `schedule_rev`):
+
+* desired key not in the table → insert `pending` (or `skipped`, above);
+* existing `pending` row → update its payload (title, place, link may change),
+  keep its `fire_at` — a row waiting for a Zulip retry keeps its due time;
+* `pending` row not desired any more → delete;
+* rows in any other state are history and never change.
 
 ## 5. Delivery
 
-The sender picks `pending` rows with `fire_at <= now`, re-reads the account
-state right before sending (paused/disconnected → `suppressed`), sends the DM,
-then stores `sent` with the Zulip message id. A crash or an ambiguous timeout
-between send and store can produce a duplicate; a lost reminder is worse.
-Temporary Zulip errors are retried on the next tick until the meeting starts
-(→ `expired`); a permanent recipient error (deactivated user) → `suppressed`
-and the account is unlinked.
+Reminder states: `pending → sending → sent`, or `pending → expired`, or
+`skipped`. Sender every 30 s:
+
+* claims due `pending` rows (§3.1), renders, sends, stores `sent` + the Zulip
+  message id;
+* a row is due at `fire_at`; it is deliverable until 2 minutes after the
+  meeting start (so 0-minute reminders work: "starting now"), then `expired`;
+* temporary Zulip errors → back to `pending`, retried next tick until
+  expiry; a permanent recipient error (deactivated user) → account unlinked,
+  its pending rows deleted.
+
+Welcome, lost-access and test messages are sent directly by the action that
+causes them, not through the reminders table.
 
 ```
 📅 **Weekly sync** starts <time:2026-10-06T14:00:00Z> (in 10 min)
