@@ -110,11 +110,42 @@ type Row struct {
 // Desired computes the reminder rows an account should have (§4). cals are
 // in the user's settings order. Pure.
 func Desired(accountID string, cals []Calendar, s Settings, now time.Time) []Row {
-	type occ struct {
-		ev       *Event
-		prec     int
-		defaults []Reminder
+	order, occs := occurrences(accountID, cals, s.SkipDeclined)
+	var rows []Row
+	for _, k := range order {
+		o := occs[k]
+		start := o.ev.Start.DateTime
+		p := payload(o.ev)
+		caught := false
+		for _, off := range offsets(o.ev, o.defaults, s) { // ascending: the closest overdue offset fires
+			r := Row{Key: k + "|" + strconv.Itoa(off), FireAt: start.Add(-time.Duration(off) * time.Minute),
+				Start: start, Payload: p, State: "pending"}
+			switch {
+			case !start.After(now):
+				r.State = ""
+			case r.FireAt.After(now):
+			case !caught && start.Sub(now) <= catchUp:
+				caught, r.FireAt = true, now
+			default:
+				r.State = "skipped"
+			}
+			rows = append(rows, r)
+		}
 	}
+	return rows
+}
+
+type occ struct {
+	ev       *Event
+	prec     int
+	defaults []Reminder
+}
+
+// occurrences picks one copy of each timed occurrence across the calendars
+// (the primary calendar's wins, then settings order), in first-seen order,
+// without cancelled ones and, with skipDeclined, declined ones. Shared by
+// the reminder schedule and Meetings.
+func occurrences(accountID string, cals []Calendar, skipDeclined bool) ([]string, map[string]*occ) {
 	occs := map[string]*occ{}
 	var order []string
 	for i, c := range cals {
@@ -140,33 +171,15 @@ func Desired(accountID string, cals []Calendar, s Settings, now time.Time) []Row
 			}
 		}
 	}
-	var rows []Row
+	// Filtered after choosing the copy: a secondary calendar's copy
+	// cannot revive a meeting the user declined in the primary one.
+	kept := order[:0]
 	for _, k := range order {
-		o := occs[k]
-		// Filtered after choosing the copy: a secondary calendar's copy
-		// cannot revive a meeting the user declined in the primary one.
-		if o.ev.Status == "cancelled" || (s.SkipDeclined && declined(o.ev)) {
-			continue
-		}
-		start := o.ev.Start.DateTime
-		p := payload(o.ev)
-		caught := false
-		for _, off := range offsets(o.ev, o.defaults, s) { // ascending: the closest overdue offset fires
-			r := Row{Key: k + "|" + strconv.Itoa(off), FireAt: start.Add(-time.Duration(off) * time.Minute),
-				Start: start, Payload: p, State: "pending"}
-			switch {
-			case !start.After(now):
-				r.State = ""
-			case r.FireAt.After(now):
-			case !caught && start.Sub(now) <= catchUp:
-				caught, r.FireAt = true, now
-			default:
-				r.State = "skipped"
-			}
-			rows = append(rows, r)
+		if ev := occs[k].ev; ev.Status != "cancelled" && !(skipDeclined && declined(ev)) {
+			kept = append(kept, k)
 		}
 	}
-	return rows
+	return kept, occs
 }
 
 func declined(ev *Event) bool {
@@ -370,7 +383,7 @@ func (p *Poller) Poll(ctx context.Context, accountID string) error {
 	now := p.Now()
 	cals := make([]Calendar, len(ids))
 	for i, id := range ids {
-		if cals[i], err = p.fetch(ctx, client, id, now); err != nil {
+		if cals[i], err = p.fetch(ctx, client, id, now.Add(-grace), now.Add(window)); err != nil {
 			if errors.Is(err, lifecycle.ErrNoAccess) {
 				return nil // LostAccess already ran
 			}
@@ -388,17 +401,55 @@ func (p *Poller) Poll(ctx context.Context, accountID string) error {
 	})
 }
 
+// Meetings reads the account's watched calendars live and returns the timed
+// meetings starting in [from, to), earliest first, with the same filtering as
+// the reminder schedule (copies deduplicated across calendars, cancelled and,
+// per the settings, declined ones dropped, all-day ones skipped). Errors are
+// never safe to show a user. lifecycle.ErrNoAccess: Google access is gone.
+func (p *Poller) Meetings(ctx context.Context, accountID string, from, to time.Time) ([]Payload, error) {
+	var skipDeclined bool
+	var calsJSON string
+	if err := p.St.DB.QueryRowContext(ctx, `SELECT skip_declined, calendars FROM settings WHERE account_id = ?`, accountID).
+		Scan(&skipDeclined, &calsJSON); err != nil {
+		return nil, err
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(calsJSON), &ids); err != nil {
+		return nil, fmt.Errorf("settings calendars: %w", err)
+	}
+	ts, err := p.Tokens(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: 30 * time.Second, Transport: &oauth2.Transport{Source: ts}} // as in Poll
+	cals := make([]Calendar, len(ids))
+	for i, id := range ids {
+		if cals[i], err = p.fetch(ctx, client, id, from, to); err != nil {
+			return nil, err
+		}
+	}
+	order, occs := occurrences(accountID, cals, skipDeclined)
+	var out []Payload
+	for _, k := range order {
+		if st := occs[k].ev.Start.DateTime; !st.Before(from) && st.Before(to) { // timeMin matches end times: drop meetings already started
+			out = append(out, payload(occs[k].ev))
+		}
+	}
+	slices.SortStableFunc(out, func(a, b Payload) int { return a.Start.Compare(b.Start) })
+	return out, nil
+}
+
 const fields = "nextPageToken,defaultReminders(minutes),items(id,iCalUID,status,summary,location,htmlLink,hangoutLink," +
 	"start,end,attendees(self,responseStatus),reminders,conferenceData/entryPoints(entryPointType,uri))"
 
-func (p *Poller) fetch(ctx context.Context, client *http.Client, calID string, now time.Time) (Calendar, error) {
+func (p *Poller) fetch(ctx context.Context, client *http.Client, calID string, from, to time.Time) (Calendar, error) {
 	c := Calendar{ID: calID}
 	q := url.Values{
 		"singleEvents": {"true"},
 		// timeMin matches end times: look back over the sender's grace (start+2min)
 		// so a pending row of a very short meeting is not deleted before it.
-		"timeMin":      {now.Add(-grace).UTC().Format(time.RFC3339)},
-		"timeMax":      {now.Add(window).UTC().Format(time.RFC3339)},
+		"timeMin":      {from.UTC().Format(time.RFC3339)},
+		"timeMax":      {to.UTC().Format(time.RFC3339)},
 		"maxAttendees": {"1"}, // more attendees → Google returns only the user's own entry
 		"fields":       {fields},
 	}

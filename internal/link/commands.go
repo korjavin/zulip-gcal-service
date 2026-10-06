@@ -22,6 +22,8 @@ var commands = map[string]string{
 	"start": "start", "resume": "start",
 	"disconnect": "disconnect",
 	"help":       "help",
+	"status":     "status",
+	"today":      "today",
 }
 
 func command(text string) string {
@@ -36,6 +38,8 @@ var (
 func (l *Linker) commandsHelp() string {
 	return "Send me one word:\n" +
 		"* **stop** — pause reminders (send **start** to resume)\n" +
+		"* **status** — your connection, timing and next reminders\n" +
+		"* **today** — meetings still ahead today\n" +
 		"* **disconnect** — delete everything this service stored about you and remove its Google access\n" +
 		"Settings: " + l.PublicURL + "/settings\n" +
 		"No reply from me within a minute? Send your message again or use the website."
@@ -91,6 +95,10 @@ func (l *Linker) runCommand(ctx context.Context, m zulip.Message, cmd string) er
 	}
 	var reply string
 	switch cmd {
+	case "status": // read-only: only the receipt, no mark
+		return l.replyOnce(ctx, m, l.statusText(ctx, id, status))
+	case "today":
+		return l.replyOnce(ctx, m, l.today(ctx, m.SenderID, id))
 	case "stop":
 		changed, err := l.Ops.Pause(ctx, id, mark)
 		if err != nil {

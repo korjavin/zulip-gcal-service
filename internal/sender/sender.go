@@ -230,6 +230,9 @@ var mdEscaper = func() *strings.Replacer {
 
 func escape(s string) string { return mdEscaper.Replace(s) }
 
+// Escape is escape for other packages that quote event text.
+func Escape(s string) string { return escape(s) }
+
 // linkURL keeps a URL inside markdown's (...) intact.
 func linkURL(u string) string {
 	return strings.NewReplacer("(", "%28", ")", "%29", " ", "%20").Replace(u)
