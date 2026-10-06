@@ -99,22 +99,27 @@ SQLite serializes writers, so that check is the whole concurrency story.
 
 * `accounts.schedule_rev` — bumped by anything that changes which reminders an
   account should have: settings save, pause/resume, link/unlink. A poll reads
-  it before fetching and commits only `WHERE schedule_rev = <read value>`;
-  otherwise its result is thrown away and the account is re-polled.
+  it before fetching and commits only `WHERE schedule_rev = <read value>`
+  and the account is still connected, linked and not paused; otherwise its
+  result is thrown away and the account is re-polled.
 * `accounts.token_rev` — bumped when a new refresh token is stored. A refresh
   failure marks the account disconnected only `WHERE token_rev = <rev used>`,
   so a stale failure never kills a newer grant.
-* Schedule-affecting changes (save, pause, link, unlink) delete the account's
-  `pending` reminders in the same write, so they apply even while Google is
-  unreachable; the next poll rebuilds them.
+* Schedule-affecting changes (save, pause, link, unlink, lost access) bump
+  `schedule_rev` and delete the account's `pending` and `sending` reminders in
+  the same write, so they apply even while Google is unreachable; the next
+  poll rebuilds them.
 * At most one poll per account in flight (in-memory set); an on-demand poll
   for an account already being polled is coalesced into one re-poll.
 * The sender claims a reminder with one conditional update
   (`pending → sending` only if the row is still pending and its account is
   connected, linked and not paused), then sends. Anything that commits before
-  the claim wins; a DM already claimed may still go out after a `stop`. On
-  startup leftover `sending` rows go back to `pending` (possible duplicate,
-  never a loss).
+  the claim wins; the one HTTP request already in flight may still deliver
+  after a `stop`, nothing after it. The sender's follow-up writes (`sent`,
+  back to `pending` on a temporary error, delete on a permanent one) all
+  require the row to still be `sending`, so a row cancelled meanwhile is
+  never revived. On startup leftover `sending` rows go back to `pending`
+  (possible duplicate, never a loss).
 
 ### 3.2 Accounts, sessions, tokens
 
@@ -148,12 +153,17 @@ One implementation each, used by the web pages and by bot commands alike.
   reminders; resume also triggers a poll. Repeating the current state is a
   no-op (no bump, no poll).
 * **Disconnect**: one write deletes the account and all its rows (refresh
-  token included) — from then on nothing can use it. Then a best-effort
+  token included) — from then on nothing can use it — and records a
+  tombstone for the Google `sub` (kept 1 hour, nothing else stored). An OAuth
+  callback for that `sub` whose login started before the tombstone, or that
+  arrives while revocation is still running, is rejected ("disconnect in
+  progress, try again"), so a stale callback cannot resurrect the account and
+  the revocation cannot kill a fresh grant. Then a best-effort
   revoke at Google with the token held in memory, 5 s timeout; the reply says
   whether revocation was confirmed. "All your data" means this service's
   stored data; Zulip DMs already sent stay in Zulip.
 * **Lost access** (`invalid_grant`): status `disconnected` (guarded by
-  `token_rev`), pending reminders deleted, one DM with the reconnect link.
+  `token_rev`), `schedule_rev` bumped, pending reminders deleted, one DM with the reconnect link.
   Signing in again re-activates the same account.
 
 ### 3.4 Zulip bot input
@@ -161,8 +171,11 @@ One implementation each, used by the web pages and by bot commands alike.
 * Only new `message` events (never `update_message`: editing a message never
   runs a command). Only one-to-one DMs: the bot plus one human sender. The
   bot's own messages are ignored. Raw content (`apply_markdown=false`).
-* Each handled message id is recorded (`handled_messages`, kept 7 days), so a
-  replayed event is never executed twice. Messages older than the sender's
+* Each handled message id is recorded (`handled_messages`, kept 7 days, not
+  tied to accounts) in the same write as the command's effect — insert first,
+  zero rows inserted means already handled — so a replayed event is never
+  executed twice, even after a crash. Revocation and replies happen after
+  that write. Messages older than the sender's
   current link are ignored, so a replayed `disconnect` cannot hit a freshly
   reconnected account.
 * Commands are the whole trimmed message, case-insensitive, optional leading
@@ -189,7 +202,8 @@ complete snapshot is reconciled.
 
 An occurrence gets reminders unless:
 
-* it is cancelled or has started;
+* it is cancelled; or it has already started and has no reminder row yet
+  (an existing `pending` row stays through its delivery grace, §5);
 * it is all-day (no reminders for all-day events in this version);
 * the user declined it (their `attendees[].self` is `declined`) — setting, on
   by default.
