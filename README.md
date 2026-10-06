@@ -51,6 +51,7 @@ never run twice) and, after a disconnect, the Google `sub` alone for 1 hour
 
 **Never stored:** meeting descriptions, attendee lists, events beyond 26
 hours, calendars the user does not watch, the content of DMs sent to the bot.
+The bot's `today` command reads the calendar live and stores nothing.
 
 **Never logged:** tokens, e-mail addresses, meeting titles or any other event
 content, DM content. Logs carry random account ids, message ids and error

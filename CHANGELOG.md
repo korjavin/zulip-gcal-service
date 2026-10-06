@@ -16,7 +16,9 @@ Workspace organization.
 * **Pages**: landing, status (next reminder, paused, lost access, stale
   sync), settings (timing, calendars, skip declined events, pause, test
   reminder, disconnect), friendly error pages.
-* **Bot DM commands**: `stop` / `start`, `disconnect`, `help`.
+* **Bot DM commands**: `stop` / `start`, `disconnect`, `status` (connection,
+  timing, next reminders), `today` (meetings still ahead today, read live
+  from Google Calendar in the Zulip profile timezone), `help`.
 * **Lost Google access**: one DM with a reconnect link; signing in again
   resumes the same account.
 * **Disconnect** deletes everything the service stores about the user and
