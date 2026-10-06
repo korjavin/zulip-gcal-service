@@ -1,0 +1,52 @@
+{{define "content"}}
+<h1>Settings</h1>
+{{if .Saved}}<p class="card" role="status">Saved. Your reminders are being updated.</p>{{end}}
+{{if .Tested}}<p class="card" role="status">Test reminder sent. Look for a message from <b>Calendar</b> in Zulip.</p>{{end}}
+<form method="post" action="/settings">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<fieldset>
+<legend>Remind me</legend>
+<label class="choice"><input type="radio" name="timing" value="google"{{if eq .Timing "google"}} checked{{end}}> As in Google Calendar</label>
+<p class="muted hint">Events without reminders in Google get none.</p>
+<label class="choice"><input type="radio" name="timing" value="fixed"{{if eq .Timing "fixed"}} checked{{end}}>
+<select name="lead" aria-label="Minutes before">{{$lead := .Lead}}{{range .Leads}}<option value="{{.}}"{{if eq . $lead}} selected{{end}}>{{.}}</option>{{end}}</select>
+minutes before</label>
+</fieldset>
+<fieldset>
+<legend>Calendars</legend>
+{{if .CalendarsError}}<p class="card stale">We can't load your calendar list from Google right now. You can still turn off calendars below.</p>{{end}}
+{{range .Calendars}}
+<label class="choice"><input type="checkbox" name="calendar" value="{{.ID}}"{{if .Checked}} checked{{end}}>
+{{if .Color}}<span class="swatch" style="background: {{.Color}}"></span>{{end}}{{.Name}}</label>
+{{end}}
+</fieldset>
+<fieldset>
+<legend>Events</legend>
+<label class="choice"><input type="checkbox" name="skip_declined" value="1"{{if .SkipDeclined}} checked{{end}}> Skip events I declined</label>
+</fieldset>
+<p><button class="button" type="submit">Save</button></p>
+</form>
+
+<h2>Try it</h2>
+<form method="post" action="/test-reminder">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<button class="button" type="submit">Send a test reminder</button>
+</form>
+
+<h2>Pause</h2>
+{{if .Paused}}
+<p>Reminders are paused.</p>
+<form method="post" action="/resume"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="button" type="submit">Resume</button></form>
+{{else}}
+<p class="muted">Stop reminders for a while. Your settings are kept.</p>
+<form method="post" action="/pause"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="button" type="submit">Pause reminders</button></form>
+{{end}}
+
+<h2>Danger zone</h2>
+<p class="muted">Stop all reminders and delete everything this service stores about you.</p>
+<form method="post" action="/disconnect" onsubmit="return confirm('Disconnect? We will delete everything we store about you and stop all reminders.')">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<button class="button danger" type="submit">Disconnect</button>
+</form>
+<p><a href="/">Back to start</a></p>
+{{end}}

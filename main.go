@@ -20,6 +20,7 @@ import (
 	"github.com/korjavin/zulip-gcal-service/internal/link"
 	"github.com/korjavin/zulip-gcal-service/internal/poller"
 	"github.com/korjavin/zulip-gcal-service/internal/sender"
+	"github.com/korjavin/zulip-gcal-service/internal/settings"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
 	"github.com/korjavin/zulip-gcal-service/internal/web"
 	"github.com/korjavin/zulip-gcal-service/internal/zulip"
@@ -76,6 +77,8 @@ func run() error {
 	lk.Register(mux)
 	(&web.Site{St: st, Zulip: zc, Account: au.Account, PollInterval: cfg.PollInterval,
 		Resume: func(ctx context.Context, id string) error { _, err := ops.Resume(ctx, id); return err }}).Register(mux)
+	(&settings.Page{St: st, Zulip: zc, Account: au.Account, CSRF: au.CSRFToken, Tokens: ops.TokenSource, Poll: pl.Trigger,
+		Pause: func(ctx context.Context, id string) error { _, err := ops.Pause(ctx, id); return err }}).Register(mux)
 	bot = zulip.NewBot(zc, st, botID, lk.HandleDM)
 	go bot.Run(ctx)
 	srv := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 10 * time.Second}
