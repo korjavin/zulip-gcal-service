@@ -55,6 +55,8 @@ type Auth struct {
 }
 
 func New(cfg *config.Config, st *store.Store, ep Endpoints) *Auth {
+	// The key fetch is shared by all callbacks and outlives each request: bound it.
+	jwksCtx := oidc.ClientContext(context.Background(), &http.Client{Timeout: 10 * time.Second})
 	return &Auth{
 		cfg: cfg,
 		st:  st,
@@ -65,7 +67,7 @@ func New(cfg *config.Config, st *store.Store, ep Endpoints) *Auth {
 			Scopes:       []string{"openid", "email", calendarScope},
 			Endpoint:     oauth2.Endpoint{AuthURL: ep.AuthURL, TokenURL: ep.TokenURL, AuthStyle: oauth2.AuthStyleInParams},
 		},
-		verifier: oidc.NewVerifier(ep.Issuer, oidc.NewRemoteKeySet(context.Background(), ep.JWKSURL),
+		verifier: oidc.NewVerifier(ep.Issuer, oidc.NewRemoteKeySet(jwksCtx, ep.JWKSURL),
 			&oidc.Config{ClientID: cfg.GoogleClientID}),
 	}
 }
