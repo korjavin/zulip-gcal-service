@@ -122,8 +122,7 @@ docker compose logs -f     # "listening" means it started
 **Portainer:** **Stacks** → **Add stack** → name `zulip-gcal` → **Web
 editor**: paste `docker-compose.yml` and change `env_file: .env` to
 `env_file: stack.env`. Under **Environment variables** → **Advanced mode**,
-paste your filled-in settings → **Deploy the stack**. (Or use **Repository**
-to deploy straight from this repository with the same variables.)
+paste your filled-in settings → **Deploy the stack**.
 
 ### 4.3 HTTPS
 
