@@ -232,11 +232,18 @@ func New(st *store.Store, tokens func(context.Context, string) (oauth2.TokenSour
 
 // Trigger asks for a poll of the account soon; never blocks. A trigger for
 // an account already queued or polling schedules one more poll after it.
-func (p *Poller) Trigger(accountID string) {
+func (p *Poller) Trigger(accountID string) { p.enqueue(accountID, true) }
+
+// enqueue queues an idle account; for a busy one, repoll says whether to
+// poll it once more afterwards (on-demand: yes; periodic tick: no, so slow
+// accounts cannot pin the workers).
+func (p *Poller) enqueue(accountID string, repoll bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if _, ok := p.inflight[accountID]; ok {
-		p.inflight[accountID] = true
+		if repoll {
+			p.inflight[accountID] = true
+		}
 		return
 	}
 	p.inflight[accountID] = false
@@ -281,7 +288,7 @@ func (p *Poller) tick(ctx context.Context) {
 	}
 	rows.Close()
 	for _, id := range ids {
-		p.Trigger(id)
+		p.enqueue(id, false)
 	}
 }
 
@@ -351,7 +358,9 @@ func (p *Poller) Poll(ctx context.Context, accountID string) error {
 	if err != nil {
 		return err
 	}
-	client := oauth2.NewClient(context.WithValue(ctx, oauth2.HTTPClient, &http.Client{Timeout: 30 * time.Second}), ts)
+	// Not oauth2.NewClient: its ReuseTokenSource would skip ts on every
+	// request, and with it the token source's invalidation check (disconnect).
+	client := &http.Client{Timeout: 30 * time.Second, Transport: &oauth2.Transport{Source: ts}}
 	now := p.Now()
 	cals := make([]Calendar, len(ids))
 	for i, id := range ids {
@@ -362,6 +371,7 @@ func (p *Poller) Poll(ctx context.Context, accountID string) error {
 			return err
 		}
 	}
+	now = p.Now() // fetching takes time; catch-up decisions use the clock at commit
 	rows := Desired(accountID, cals, s, now)
 	return p.St.WithScheduleRev(ctx, accountID, rev, func(tx *sql.Tx) error {
 		if err := reconcile(ctx, tx, accountID, rows, now); err != nil {

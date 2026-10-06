@@ -415,6 +415,13 @@ func TestPollIneligibleAccounts(t *testing.T) {
 }
 
 func TestTriggerSingleFlight(t *testing.T) {
+	// On-demand triggers during a poll coalesce into one re-poll.
+	singleFlight(t, func(p *Poller) { p.Trigger("acc"); p.Trigger("acc"); p.Trigger("acc") }, 4)
+	// A periodic tick never re-polls a busy account (slow accounts must not pin the workers).
+	singleFlight(t, func(p *Poller) { p.enqueue("acc", false) }, 2)
+}
+
+func singleFlight(t *testing.T, during func(*Poller), wantReqs int32) {
 	e := newEnv(t)
 	e.set("primary", page())
 	e.set("team", page())
@@ -425,9 +432,7 @@ func TestTriggerSingleFlight(t *testing.T) {
 	e.p.Interval = time.Hour
 	go e.p.Run(ctx) // the first tick triggers acc
 	<-entered       // first poll is fetching
-	e.p.Trigger("acc")
-	e.p.Trigger("acc")
-	e.p.Trigger("acc") // coalesced into one re-poll
+	during(e.p)
 	close(release)
 	deadline := time.After(5 * time.Second)
 	for {
@@ -443,7 +448,7 @@ func TestTriggerSingleFlight(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	if n := e.reqs.Load(); n != 4 { // 2 polls x 2 calendars
-		t.Errorf("%d requests, want 4", n)
+	if n := e.reqs.Load(); n != wantReqs { // 2 calendars per poll
+		t.Errorf("%d requests, want %d", n, wantReqs)
 	}
 }
