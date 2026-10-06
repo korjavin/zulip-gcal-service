@@ -74,6 +74,16 @@ func TestCommands(t *testing.T) {
 	want("hello", "sign in with Google")
 }
 
+func TestNewCodeSkipsCommandWords(t *testing.T) {
+	draws := []string{"RESUME", "ABCDEF"}
+	orig := drawCode
+	t.Cleanup(func() { drawCode = orig })
+	drawCode = func() string { c := draws[0]; draws = draws[1:]; return c }
+	if c := newCode(); c != "ABCDEF" {
+		t.Fatalf("newCode = %q, want the command word redrawn", c)
+	}
+}
+
 // A disconnect replayed after a reconnect (crash before the reply, then the
 // same event again; or a purged receipt) does nothing.
 func TestReplayedDisconnect(t *testing.T) {

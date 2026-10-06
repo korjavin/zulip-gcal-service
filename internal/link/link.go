@@ -119,7 +119,17 @@ func (l *Linker) liveCode(ctx context.Context, accountID string, now time.Time) 
 	return "", errors.New("no free link code")
 }
 
+// newCode draws codes until one is not a command word (e.g. RESUME), which
+// HandleDM would read as the command.
 func newCode() string {
+	for {
+		if c := drawCode(); command(c) == "" {
+			return c
+		}
+	}
+}
+
+var drawCode = func() string { // tests replace it
 	b := make([]byte, codeLen)
 	for i := range b {
 		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(codeAlphabet))))
@@ -225,8 +235,8 @@ func (l *Linker) fail(w http.ResponseWriter, err error) {
 func (l *Linker) HandleDM(ctx context.Context, m zulip.Message) error {
 	now := time.Now()
 	code := strings.ToUpper(m.Text)
-	// ponytail: command words go first, so "resume" (6 letters) is never a
-	// wrong code; a drawn code that spells RESUME is a 1-in-10^9 miss.
+	// Command words go first, so "resume" (6 letters) is never a wrong code;
+	// newCode never draws a command word, so no code is shadowed.
 	if cmd := command(m.Text); cmd != "" || !looksLikeCode(code) {
 		return l.command(ctx, m, cmd)
 	}
