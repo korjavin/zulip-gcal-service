@@ -13,7 +13,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"html/template"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -25,6 +24,7 @@ import (
 
 	"github.com/korjavin/zulip-gcal-service/internal/config"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
+	"github.com/korjavin/zulip-gcal-service/internal/web"
 )
 
 const (
@@ -86,10 +86,12 @@ type loginState struct {
 	Started  int64  `json:"t"` // login start, unix seconds (tombstone check, §3.3)
 	Consent  bool   `json:"c"` // already retried with prompt=consent
 	Expires  int64  `json:"e"`
+	Switch   bool   `json:"-"` // ask Google for the account chooser
 }
 
 func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
-	a.redirectToGoogle(w, r, loginState{Started: time.Now().Unix()}, "")
+	// ?switch=1: let the user pick another Google account (wrong-domain page).
+	a.redirectToGoogle(w, r, loginState{Started: time.Now().Unix(), Switch: r.URL.Query().Has("switch")}, "")
 }
 
 func (a *Auth) redirectToGoogle(w http.ResponseWriter, r *http.Request, ls loginState, hint string) {
@@ -103,6 +105,8 @@ func (a *Auth) redirectToGoogle(w http.ResponseWriter, r *http.Request, ls login
 		if hint != "" {
 			opts = append(opts, oauth2.SetAuthURLParam("login_hint", hint))
 		}
+	} else if ls.Switch {
+		opts = append(opts, oauth2.SetAuthURLParam("prompt", "select_account"))
 	}
 	http.Redirect(w, r, a.oauth.AuthCodeURL(ls.State, opts...), http.StatusFound)
 }
@@ -131,7 +135,7 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 	tok, err := a.oauth.Exchange(ctx, q.Get("code"), oauth2.VerifierOption(ls.Verifier))
 	if err != nil {
 		slog.Warn("google code exchange failed", "err", err) // error responses carry no tokens
-		page(w, http.StatusBadGateway, "Google sign-in failed. Please try again.")
+		web.Error(w, http.StatusBadGateway, web.GoogleError)
 		return
 	}
 	raw, _ := tok.Extra("id_token").(string)
@@ -142,16 +146,16 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil || c.Sub == "" {
 		slog.Warn("google id token rejected", "err", err)
-		page(w, http.StatusBadGateway, "Google sign-in failed. Please try again.")
+		web.Error(w, http.StatusBadGateway, web.GoogleError)
 		return
 	}
 	if len(a.cfg.AllowedDomains) > 0 && !slices.Contains(a.cfg.AllowedDomains, strings.ToLower(c.HD)) {
-		page(w, http.StatusForbidden, "This service is only for accounts of this organization. Sign in with your work Google account.")
+		web.Error(w, http.StatusForbidden, web.DomainNotAllowed)
 		return
 	}
 	scope, _ := tok.Extra("scope").(string)
 	if !slices.Contains(strings.Fields(scope), calendarScope) {
-		page(w, http.StatusForbidden, "We need read access to your calendar to send reminders. Please sign in again and allow calendar access.")
+		web.Error(w, http.StatusForbidden, web.ScopeNotGranted)
 		return
 	}
 
@@ -317,15 +321,7 @@ func clearCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{Name: name, Path: "/", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 }
 
-var pageTmpl = template.Must(template.New("").Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Calendar reminders</title></head>
-<body style="font-family:system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem">
-<p>{{.}}</p><p><a href="/login">Sign in with Google</a></p>
-</body></html>`))
-
 // page is the friendly error page: a message and a way to try again.
 func page(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(code)
-	pageTmpl.Execute(w, msg)
+	web.Error(w, code, web.Message{Title: "Sign-in didn't finish", Text: msg, Button: "Sign in with Google", URL: "/login"})
 }

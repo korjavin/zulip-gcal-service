@@ -1,0 +1,27 @@
+{{define "content"}}
+<h1>Meeting reminders in Zulip</h1>
+<p>Connected as <b>{{.Email}}</b> → Zulip{{if .ZulipName}} <b>{{.ZulipName}}</b>{{end}}</p>
+<div class="card {{.State}}" role="status">
+{{if eq .State "lost"}}
+<p><b>We lost access to your Google Calendar.</b> Reminders are off until you reconnect.</p>
+<p><a class="button" href="/login">Reconnect</a></p>
+{{else if eq .State "paused"}}
+<p><b>Reminders are paused.</b></p>
+<form method="post" action="/resume"><button class="button" type="submit">Resume</button></form>
+{{else if eq .State "stale"}}
+<p><b>We can't read your calendar right now, retrying.</b></p>
+{{else if .Next}}
+<p>Next: <b>{{.Next.Title}}</b> at <time datetime="{{iso .Next.Start}}">{{utc .Next.Start}}</time>
+— reminder at <time datetime="{{iso .FireAt}}">{{utc .FireAt}}</time></p>
+{{else}}
+<p>No reminders scheduled.</p>
+{{end}}
+</div>
+<p class="muted">Reminders come to you in Zulip as direct messages from <b>Calendar</b>.</p>
+<nav class="links">
+<a href="/settings">Settings</a>
+<form method="post" action="/disconnect" onsubmit="return confirm('Disconnect? We will delete everything we store about you and stop all reminders.')">
+<button class="link" type="submit">Disconnect</button>
+</form>
+</nav>
+{{end}}
