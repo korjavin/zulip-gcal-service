@@ -83,6 +83,16 @@ func TestUserLookup(t *testing.T) {
 		if err == nil || errors.Is(err, ErrNotFound) || Temporary(err) != temp {
 			t.Errorf("%s: %v (temporary=%v), want real error, temporary=%v", email, err, Temporary(err), temp)
 		}
+		if strings.Contains(err.Error(), strings.TrimSuffix(email, "@x")) {
+			t.Errorf("%s: error leaks the e-mail: %v", email, err)
+		}
+	}
+	// Transport failure: *url.Error would carry the URL with the e-mail.
+	srv := httptest.NewServer(mux)
+	srv.Close()
+	_, err := New(srv.URL, "bot@x", "key").UserByEmail(ctx, "secret.person@x")
+	if err == nil || !Temporary(err) || strings.Contains(err.Error(), "secret") {
+		t.Errorf("transport failure: %v (temporary=%v)", err, Temporary(err))
 	}
 }
 
