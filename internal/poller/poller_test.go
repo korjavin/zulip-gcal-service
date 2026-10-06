@@ -118,6 +118,11 @@ func TestDesired(t *testing.T) {
 		{"declined skipped", google,
 			[]Calendar{cal(t, "primary", "", ev("a", now.Add(2*time.Hour), mins(10), `"attendees":[{"self":true,"responseStatus":"declined"}]`))},
 			nil},
+		{"declined in primary wins over another calendar's copy", google,
+			[]Calendar{
+				cal(t, "team", "", ev("a", now.Add(2*time.Hour), mins(10))),
+				cal(t, "primary", "", ev("a", now.Add(2*time.Hour), mins(10), `"attendees":[{"self":true,"responseStatus":"declined"}]`))},
+			nil},
 		{"declined kept when the setting is off", Settings{Timing: "google"},
 			[]Calendar{cal(t, "primary", "", ev("a", now.Add(2*time.Hour), mins(10), `"attendees":[{"self":true,"responseStatus":"declined"}]`))},
 			[]want{{"a|10", "pending", now.Add(110 * time.Minute)}}},
@@ -211,7 +216,7 @@ func newEnv(t *testing.T) *env {
 		e.mu.Lock()
 		t0 := e.now
 		e.mu.Unlock()
-		if q.Get("singleEvents") != "true" || q.Get("timeMin") != t0.Format(time.RFC3339) ||
+		if q.Get("singleEvents") != "true" || q.Get("timeMin") != t0.Add(-2*time.Minute).Format(time.RFC3339) ||
 			q.Get("timeMax") != t0.Add(26*time.Hour).Format(time.RFC3339) || !strings.Contains(q.Get("fields"), "nextPageToken") {
 			http.Error(w, "bad query "+r.URL.RawQuery, 400)
 			return

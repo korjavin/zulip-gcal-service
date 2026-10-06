@@ -29,8 +29,9 @@ import (
 
 const (
 	window   = 26 * time.Hour
-	catchUp  = time.Hour // overdue offsets fire once only if the meeting starts within this
-	maxOff   = 1440      // minutes
+	catchUp  = time.Hour       // overdue offsets fire once only if the meeting starts within this
+	maxOff   = 1440            // minutes
+	grace    = 2 * time.Minute // a reminder is deliverable until start+grace (§5)
 	workers  = 4
 	attempts = 3 // polls per trigger when the guarded write keeps finding a stale schedule_rev
 )
@@ -123,7 +124,7 @@ func Desired(accountID string, cals []Calendar, s Settings, now time.Time) []Row
 		}
 		for j := range c.Items {
 			ev := &c.Items[j]
-			if ev.Status == "cancelled" || ev.Start.DateTime.IsZero() || (s.SkipDeclined && declined(ev)) {
+			if ev.Start.DateTime.IsZero() { // all-day
 				continue
 			}
 			uid := ev.ICalUID
@@ -142,6 +143,11 @@ func Desired(accountID string, cals []Calendar, s Settings, now time.Time) []Row
 	var rows []Row
 	for _, k := range order {
 		o := occs[k]
+		// Filtered after choosing the copy: a secondary calendar's copy
+		// cannot revive a meeting the user declined in the primary one.
+		if o.ev.Status == "cancelled" || (s.SkipDeclined && declined(o.ev)) {
+			continue
+		}
 		start := o.ev.Start.DateTime
 		p := payload(o.ev)
 		caught := false
@@ -389,7 +395,9 @@ func (p *Poller) fetch(ctx context.Context, client *http.Client, calID string, n
 	c := Calendar{ID: calID}
 	q := url.Values{
 		"singleEvents": {"true"},
-		"timeMin":      {now.UTC().Format(time.RFC3339)},
+		// timeMin matches end times: look back over the sender's grace (start+2min)
+		// so a pending row of a very short meeting is not deleted before it.
+		"timeMin":      {now.Add(-grace).UTC().Format(time.RFC3339)},
 		"timeMax":      {now.Add(window).UTC().Format(time.RFC3339)},
 		"maxAttendees": {"1"}, // more attendees → Google returns only the user's own entry
 		"fields":       {fields},
