@@ -33,6 +33,12 @@ Everything else is optional, on the settings page (same Google sign-in):
 reminder timing, which calendars, skip declined events, pause, disconnect,
 send a test reminder.
 
+Without leaving Zulip, the user can DM the bot:
+
+* `stop` — pause reminders (calendar access kept); `start` resumes.
+* `disconnect` — revoke the Google access and delete everything stored about
+  the user, refresh token included. Reconnecting is one click on the page.
+
 ## 2. What an admin does (once)
 
 1. Google Cloud: enable the Calendar API, create an OAuth client (Web
