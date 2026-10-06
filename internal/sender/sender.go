@@ -35,7 +35,9 @@ type Sender struct {
 }
 
 func New(st *store.Store, zc *zulip.Client) *Sender {
-	return &Sender{St: st, Zulip: zc, Now: time.Now}
+	// Once: a 429 is retried next tick after a fresh claim, never by the
+	// client after a pause may have committed.
+	return &Sender{St: st, Zulip: zc.Once(), Now: time.Now}
 }
 
 // Run ticks every 30 s until ctx ends.
@@ -55,6 +57,11 @@ func (s *Sender) Run(ctx context.Context) {
 // Tick expires overdue rows, delivers due ones and purges old history.
 func (s *Sender) Tick(ctx context.Context) error {
 	now := s.Now()
+	// Ticks never overlap and each one finishes its sends, so a "sending" row
+	// here is one whose outcome write failed: retry it (possible duplicate).
+	if _, err := s.St.DB.ExecContext(ctx, `UPDATE reminders SET state = 'pending' WHERE state = 'sending'`); err != nil {
+		return err
+	}
 	deadline := now.Add(-grace).Unix() // rows whose event started before this are no longer deliverable
 	if _, err := s.St.DB.ExecContext(ctx, `UPDATE reminders SET state = 'expired', updated_at = ?
 		WHERE state = 'pending' AND event_start < ?`, now.Unix(), deadline); err != nil {
@@ -97,12 +104,15 @@ func (s *Sender) deliver(ctx context.Context, key string) error {
 	var accountID, pj string
 	var to int64
 	// The claim: anything committed before it (pause, unlink, cancellation)
-	// wins; zulip_user_id is read in the same statement.
+	// wins; zulip_user_id is read in the same statement. A row that went past
+	// its deadline during this tick's earlier sends is left for the next
+	// tick's expiry.
+	now := s.Now()
 	err := s.St.DB.QueryRowContext(ctx, `UPDATE reminders SET state = 'sending', updated_at = ?
-		WHERE key = ? AND state = 'pending' AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = reminders.account_id
+		WHERE key = ? AND state = 'pending' AND event_start >= ? AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = reminders.account_id
 			AND a.status = 'connected' AND a.zulip_user_id IS NOT NULL AND a.paused = 0)
 		RETURNING account_id, payload, (SELECT zulip_user_id FROM accounts a WHERE a.id = reminders.account_id)`,
-		s.Now().Unix(), key).Scan(&accountID, &pj, &to)
+		now.Unix(), key, now.Add(-grace).Unix()).Scan(&accountID, &pj, &to)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // not claimed: skip
 	}
@@ -117,18 +127,18 @@ func (s *Sender) deliver(ctx context.Context, key string) error {
 	// below can deliver twice (the row goes back to pending); accepted, a loss is not.
 	msgID, sendErr := s.Zulip.SendDM(ctx, to, Render(p, s.Now()))
 	wctx := context.WithoutCancel(ctx) // record the outcome even while shutting down
-	now := s.Now().Unix()
+	at := s.Now().Unix()
 	switch {
 	case sendErr == nil:
 		_, err = s.St.DB.ExecContext(wctx, `UPDATE reminders SET state = 'sent', zulip_message_id = ?, updated_at = ?
-			WHERE key = ? AND state = 'sending'`, msgID, now, key)
+			WHERE key = ? AND state = 'sending'`, msgID, at, key)
 	case errors.Is(sendErr, zulip.ErrRecipient):
 		slog.Warn("reminder recipient cannot receive DMs, unlinking account", "account", accountID)
 		err = s.unlink(wctx, key, accountID, to)
 	default:
 		slog.Warn("reminder send failed, retrying next tick", "account", accountID, "err", logErr(sendErr))
 		_, err = s.St.DB.ExecContext(wctx, `UPDATE reminders SET state = 'pending', updated_at = ?
-			WHERE key = ? AND state = 'sending'`, now, key)
+			WHERE key = ? AND state = 'sending'`, at, key)
 	}
 	return err
 }

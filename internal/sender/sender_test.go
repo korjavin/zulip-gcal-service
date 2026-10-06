@@ -167,6 +167,35 @@ func TestRetryThenSentThenExpired(t *testing.T) {
 	}
 }
 
+func TestDeadlinePassedDuringTick(t *testing.T) {
+	e := newEnv(t)
+	e.add("a", t0.Add(-time.Minute), t0.Add(10*time.Minute))
+	e.add("b", t0, t0.Add(time.Minute))
+	e.set(func() { e.hook = func() { e.set(func() { e.now = t0.Add(3*time.Minute + time.Second) }) } }) // a's send is slow
+	e.tick()
+	e.tick()
+	if e.sentCount() != 1 || e.state("b") != "expired" {
+		t.Fatalf("sent %d, b %s", e.sentCount(), e.state("b"))
+	}
+}
+
+func TestOutcomeWriteFailureRecovered(t *testing.T) {
+	e := newEnv(t)
+	e.add("a", t0, t0.Add(10*time.Minute))
+	e.set(func() { e.status = 502 })
+	e.exec(`CREATE TRIGGER fail BEFORE UPDATE ON reminders WHEN OLD.state = 'sending' AND NEW.state = 'pending'
+		BEGIN SELECT RAISE(ABORT, 'busy'); END`)
+	if err := e.s.Tick(context.Background()); err == nil {
+		t.Fatal("want the write error")
+	}
+	e.exec(`DROP TRIGGER fail`)
+	e.set(func() { e.status = 0 })
+	e.tick()
+	if e.sentCount() != 1 || e.state("a") != "sent 1001" {
+		t.Fatalf("sent %d, a %s", e.sentCount(), e.state("a"))
+	}
+}
+
 func TestZeroMinuteReminder(t *testing.T) {
 	e := newEnv(t)
 	e.add("a", t0, t0)
@@ -202,12 +231,14 @@ func TestCancelledWhileSending(t *testing.T) {
 	}{
 		{"claimed then paused -> may finish", pause, 0, 1},
 		{"claim, pause, 5xx -> not retried", pause, 500, 0},
+		{"claim, pause, 429 -> not retried by the client", pause, 429, 0},
 		{"claim, cancellation poll, 5xx -> not retried", `DELETE FROM reminders WHERE key = 'a' AND state IN ('pending', 'sending')`, 500, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEnv(t)
 			e.add("a", t0, t0.Add(10*time.Minute))
-			e.set(func() { e.status = tc.status; e.hook = func() { e.exec(tc.q) } })
+			// The first reply has tc.status; a client-side retry would succeed.
+			e.set(func() { e.status = tc.status; e.hook = func() { e.exec(tc.q); e.set(func() { e.status = 0 }) } })
 			e.tick()
 			e.set(func() { e.status, e.hook = 0, nil })
 			e.exec(`UPDATE accounts SET paused = 0`)
