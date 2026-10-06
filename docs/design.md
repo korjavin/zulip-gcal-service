@@ -179,7 +179,9 @@ One implementation each, used by the web pages and by bot commands alike.
   current link are ignored, so a replayed `disconnect` cannot hit a freshly
   reconnected account.
 * Commands are the whole trimmed message, case-insensitive, optional leading
-  `/`: `stop` (`pause`), `start` (`resume`), `disconnect`, `help`. Anything
+  `/`: `stop` (`pause`), `start` (`resume`), `disconnect`, `status` (connected
+  as, timing, next 3 reminders), `today` (meetings still ahead today, from
+  pending reminders, in the Zulip profile timezone, UTC if unknown), `help`. Anything
   else gets help. `start` on a disconnected account replies with the
   reconnect link.
 * Exact command words are matched first, then 6-char link codes: `resume` is

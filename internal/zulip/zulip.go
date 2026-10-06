@@ -76,6 +76,7 @@ type User struct {
 	FullName string `json:"full_name"`
 	IsActive bool   `json:"is_active"`
 	IsBot    bool   `json:"is_bot"`
+	Timezone string `json:"timezone"` // IANA name, may be empty
 }
 
 // CheckServer refuses servers older than MinFeatureLevel and returns the
