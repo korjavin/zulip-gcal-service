@@ -460,6 +460,11 @@ func (p *Poller) fetch(ctx context.Context, client *http.Client, calID string, f
 		}
 		resp, err := client.Do(req)
 		if err != nil {
+			// *url.Error carries the URL, whose calendar id may be an e-mail: never return it.
+			var ue *url.Error
+			if errors.As(err, &ue) {
+				err = fmt.Errorf("calendar API: %w", ue.Err)
+			}
 			return c, err
 		}
 		var page struct {
