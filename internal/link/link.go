@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/korjavin/zulip-gcal-service/internal/lifecycle"
+	"github.com/korjavin/zulip-gcal-service/internal/poller"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
 	"github.com/korjavin/zulip-gcal-service/internal/web"
 	"github.com/korjavin/zulip-gcal-service/internal/zulip"
@@ -37,8 +38,9 @@ type Linker struct {
 	BotID      int64
 	PublicURL  string
 	ZulipSite  string
-	Poll       func(accountID string) // immediate poll after linking; nil = none
-	Ops        *lifecycle.Ops         // bot commands stop/start/disconnect
+	Poll       func(accountID string)                                                                    // immediate poll after linking; nil = none
+	Meetings   func(ctx context.Context, accountID string, from, to time.Time) ([]poller.Payload, error) // live calendar read for "today"
+	Ops        *lifecycle.Ops                                                                            // bot commands stop/start/disconnect
 
 	wrong map[int64][]time.Time // ponytail: only touched by the sequential bot loop, no lock
 }

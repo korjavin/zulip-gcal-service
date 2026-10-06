@@ -135,6 +135,17 @@ func (c *Client) user(ctx context.Context, path string) (User, error) {
 	return *r.User, nil
 }
 
+// UserLocation is the user's profile timezone, UTC when it cannot be read.
+// Shared by every feature that needs the user's local day.
+func (c *Client) UserLocation(ctx context.Context, id int64) *time.Location {
+	if u, err := c.UserByID(ctx, id); err == nil && u.Timezone != "" {
+		if loc, err := time.LoadLocation(u.Timezone); err == nil {
+			return loc
+		}
+	}
+	return time.UTC
+}
+
 // SendDM sends a direct message and returns its message id. A recipient that
 // is deactivated or gone yields ErrRecipient.
 func (c *Client) SendDM(ctx context.Context, userID int64, content string) (int64, error) {

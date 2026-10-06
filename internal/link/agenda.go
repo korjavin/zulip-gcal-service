@@ -58,32 +58,22 @@ func (l *Linker) pending(ctx context.Context, id, order string, limit int) (out 
 	return out
 }
 
-// today lists meetings with a pending reminder that start before the end of
-// the sender's local day (Zulip profile timezone, UTC if unknown).
-// ponytail: a meeting with no pending reminder (already reminded, or beyond
-// the poll window) is not listed; query the calendar live if that matters.
+// today lists the meetings still ahead before the end of the sender's local
+// day, read live from Google Calendar (Zulip profile timezone, UTC if unknown).
 func (l *Linker) today(ctx context.Context, zulipID int64, id string) string {
-	loc := time.UTC
-	if u, err := l.Zulip.UserByID(ctx, zulipID); err == nil && u.Timezone != "" {
-		if tz, err := time.LoadLocation(u.Timezone); err == nil {
-			loc = tz
-		}
-	}
 	now := time.Now()
+	loc := l.Zulip.UserLocation(ctx, zulipID)
 	y, mo, d := now.In(loc).Date()
-	end := time.Date(y, mo, d+1, 0, 0, 0, 0, loc)
-	var lines []string
-	seen := map[string]bool{}
-	for _, p := range l.pending(ctx, id, "event_start, fire_at", 1000) { // several offsets of one event repeat
-		k := p.Title + p.Start.String()
-		if !p.Start.Before(end) || p.Start.Before(now) || seen[k] { // pending rows outlive the start by the send grace
-			continue
-		}
-		seen[k] = true
-		lines = append(lines, fmt.Sprintf("* <time:%s> **%s**", p.Start.UTC().Format(time.RFC3339), sender.Escape(p.Title)))
+	ms, err := l.Meetings(ctx, id, now, time.Date(y, mo, d+1, 0, 0, 0, 0, loc))
+	if err != nil { // never the error text: it may carry event data
+		return "I couldn't read your calendar right now. Try again in a minute."
 	}
-	if len(lines) == 0 {
+	if len(ms) == 0 {
 		return "No more meetings today."
+	}
+	lines := make([]string, len(ms))
+	for i, p := range ms {
+		lines[i] = fmt.Sprintf("* <time:%s> **%s**", p.Start.UTC().Format(time.RFC3339), sender.Escape(p.Title))
 	}
 	return "Still ahead today:\n" + strings.Join(lines, "\n")
 }
