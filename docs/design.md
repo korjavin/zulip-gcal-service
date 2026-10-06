@@ -179,12 +179,16 @@ One implementation each, used by the web pages and by bot commands alike.
   current link are ignored, so a replayed `disconnect` cannot hit a freshly
   reconnected account.
 * Commands are the whole trimmed message, case-insensitive, optional leading
-  `/`: `stop`, `start`, `disconnect`, `help`. Anything else gets help.
-  `start` on a disconnected account replies with the reconnect link.
+  `/`: `stop` (`pause`), `start` (`resume`), `disconnect`, `help`. Anything
+  else gets help. `start` on a disconnected account replies with the
+  reconnect link.
+* Exact command words are matched first, then 6-char link codes: `resume` is
+  6 letters and must not count as a wrong code. Code generation never draws a
+  command word.
 * **Link codes**: 6 chars, unambiguous alphabet, 15 min TTL, at most one live
   code per account, consumed atomically, all of the account's codes deleted
   on any successful link, only links an unlinked account, wrong attempts
-  throttled per sender. Checked before commands.
+  throttled per sender.
 * The event queue is not durable: a DM sent while the service is down can be
   missed. Every command and code gets a reply; the help text says "no reply
   within a minute → send again or use the website".

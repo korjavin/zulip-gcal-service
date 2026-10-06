@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/korjavin/zulip-gcal-service/internal/lifecycle"
 	"github.com/korjavin/zulip-gcal-service/internal/store"
 	"github.com/korjavin/zulip-gcal-service/internal/web"
 	"github.com/korjavin/zulip-gcal-service/internal/zulip"
@@ -37,6 +38,7 @@ type Linker struct {
 	PublicURL  string
 	ZulipSite  string
 	Poll       func(accountID string) // immediate poll after linking; nil = none
+	Ops        *lifecycle.Ops         // bot commands stop/start/disconnect
 
 	wrong map[int64][]time.Time // ponytail: only touched by the sequential bot loop, no lock
 }
@@ -47,8 +49,8 @@ func (l *Linker) Register(mux *http.ServeMux) {
 }
 
 func (l *Linker) welcome() string {
-	// ponytail: the stop/start/disconnect line joins with zgc-civ.3.
-	return "Hi! I'll remind you about your Google Calendar meetings. Settings: " + l.PublicURL + "/settings"
+	return "Hi! I'll remind you about your Google Calendar meetings. Settings: " + l.PublicURL + "/settings\n" +
+		"Send me **stop** to pause reminders, **start** to resume, **disconnect** to delete your data, **help** for more."
 }
 
 func (l *Linker) help() string {
@@ -117,7 +119,17 @@ func (l *Linker) liveCode(ctx context.Context, accountID string, now time.Time) 
 	return "", errors.New("no free link code")
 }
 
+// newCode draws codes until one is not a command word (e.g. RESUME), which
+// HandleDM would read as the command.
 func newCode() string {
+	for {
+		if c := drawCode(); command(c) == "" {
+			return c
+		}
+	}
+}
+
+var drawCode = func() string { // tests replace it
 	b := make([]byte, codeLen)
 	for i := range b {
 		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(codeAlphabet))))
@@ -218,12 +230,15 @@ func (l *Linker) fail(w http.ResponseWriter, err error) {
 	web.Error(w, http.StatusInternalServerError, web.Oops)
 }
 
-// HandleDM is the bot's message handler (zulip.Handler): a link code, else help.
+// HandleDM is the bot's message handler (zulip.Handler): a command word,
+// else a link code, else help.
 func (l *Linker) HandleDM(ctx context.Context, m zulip.Message) error {
 	now := time.Now()
 	code := strings.ToUpper(m.Text)
-	if !looksLikeCode(code) {
-		return l.replyOnce(ctx, m, l.help())
+	// Command words go first, so "resume" (6 letters) is never a wrong code;
+	// newCode never draws a command word, so no code is shadowed.
+	if cmd := command(m.Text); cmd != "" || !looksLikeCode(code) {
+		return l.command(ctx, m, cmd)
 	}
 	if l.throttled(m.SenderID, now) {
 		return l.replyOnce(ctx, m, "Too many wrong codes. Please wait 15 minutes, then open "+l.PublicURL+" to get a new one.")

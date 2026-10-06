@@ -82,7 +82,7 @@ func newEnv(t *testing.T) *env {
 	cfg := &config.Config{PublicURL: "https://cal.example.com", GoogleClientID: "cid", GoogleClientSecret: "cs", Secrets: secrets}
 	e.o = New(cfg, e.st, zulip.New(zs.URL, "bot@example.com", "key"))
 	e.o.oauth.Endpoint.TokenURL = gs.URL + "/token"
-	e.o.revokeURL = gs.URL + "/revoke"
+	e.o.RevokeURL = gs.URL + "/revoke"
 	return e
 }
 
