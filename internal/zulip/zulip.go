@@ -61,6 +61,14 @@ func New(site, email, apiKey string) *Client {
 		http: &http.Client{}, maxRetryWait: time.Minute}
 }
 
+// Once returns a copy of c that returns every 429 instead of sleeping it
+// out and retrying.
+func (c *Client) Once() *Client {
+	cc := *c
+	cc.maxRetryWait = -1
+	return &cc
+}
+
 // User is the subset of a Zulip user object we use.
 type User struct {
 	ID       int64  `json:"user_id"`

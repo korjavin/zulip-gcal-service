@@ -436,7 +436,7 @@ func (p *Poller) fetch(ctx context.Context, client *http.Client, calID string, n
 }
 
 // reconcile applies desired rows (§4): insert new keys, refresh the payload
-// of pending rows (keeping fire_at), delete pending rows no longer desired;
+// of pending rows (keeping fire_at), delete pending/sending rows no longer desired;
 // rows in any other state are history and never change.
 func reconcile(ctx context.Context, tx *sql.Tx, accountID string, rows []Row, now time.Time) error {
 	existing := map[string]string{}
@@ -476,10 +476,12 @@ func reconcile(ctx context.Context, tx *sql.Tx, accountID string, rows []Row, no
 		}
 	}
 	for k, st := range existing {
-		if st != "pending" {
+		if st != "pending" && st != "sending" {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM reminders WHERE key = ? AND state = 'pending'`, k); err != nil {
+		// A cancelled row mid-send goes too, so the sender's retry cannot
+		// revive it (§3.1).
+		if _, err := tx.ExecContext(ctx, `DELETE FROM reminders WHERE key = ? AND state IN ('pending', 'sending')`, k); err != nil {
 			return err
 		}
 	}
