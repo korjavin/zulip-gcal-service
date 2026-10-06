@@ -2,6 +2,7 @@ package settings
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -227,4 +228,42 @@ func TestPause(t *testing.T) {
 	}
 	e.exec(`UPDATE accounts SET paused = 1`)
 	contains(t, e.get(t), `action="/resume"`)
+}
+
+func TestAgendaSetting(t *testing.T) {
+	e := newEnv(t)
+	body := e.get(t)
+	contains(t, body, `name="agenda_time" value="08:00"`)
+	if strings.Contains(body, `name="agenda" value="1" checked`) {
+		t.Error("agenda on by default")
+	}
+	e.exec(`UPDATE settings SET agenda_tz = 'Europe/Berlin', agenda_sent = '2026-10-06'`)
+	form := url.Values{"csrf": {"tok-a1"}, "timing": {"google"}, "lead": {"10"}, "calendar": {"primary"},
+		"agenda": {"1"}, "agenda_time": {"07:30"}, "agenda_workdays": {"1"}}
+	if rec := e.do("POST", "/settings", form); rec.Code != http.StatusSeeOther {
+		t.Fatalf("save = %d", rec.Code)
+	}
+	var minute, workdays, rev int
+	var tz, sent string
+	e.st.DB.QueryRow(`SELECT agenda_minute, agenda_workdays, agenda_tz, agenda_sent FROM settings`).Scan(&minute, &workdays, &tz, &sent)
+	e.st.DB.QueryRow(`SELECT schedule_rev FROM accounts`).Scan(&rev)
+	// The timezone is re-read; today's agenda is not sent again.
+	if minute != 450 || workdays != 1 || tz != "" || sent != "2026-10-06" || rev != 1 {
+		t.Errorf("stored %d %d %q %q rev=%d", minute, workdays, tz, sent, rev)
+	}
+	contains(t, e.get(t), `name="agenda" value="1" checked`, `value="07:30"`, `name="agenda_workdays" value="1" checked`)
+
+	form.Set("agenda_time", "25:00")
+	if rec := e.do("POST", "/settings", form); rec.Code != http.StatusBadRequest {
+		t.Errorf("bad time = %d", rec.Code)
+	}
+	form.Del("agenda") // off: the time field does not matter
+	if rec := e.do("POST", "/settings", form); rec.Code != http.StatusSeeOther {
+		t.Fatalf("save off = %d", rec.Code)
+	}
+	var off sql.NullInt64
+	e.st.DB.QueryRow(`SELECT agenda_minute FROM settings`).Scan(&off)
+	if off.Valid {
+		t.Errorf("agenda still on: %d", off.Int64)
+	}
 }

@@ -439,6 +439,35 @@ func (p *Poller) Meetings(ctx context.Context, accountID string, from, to time.T
 	return out, nil
 }
 
+// TimeZone is the IANA timeZone of the account's primary Google calendar
+// ("" if Google has none). Errors are never safe to show a user.
+func (p *Poller) TimeZone(ctx context.Context, accountID string) (string, error) {
+	ts, err := p.Tokens(ctx, accountID)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 30 * time.Second, Transport: &oauth2.Transport{Source: ts}} // as in Poll
+	req, err := http.NewRequestWithContext(ctx, "GET", p.BaseURL+"/calendars/primary?fields=timeZone", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("calendar API: %s", resp.Status)
+	}
+	var c struct {
+		TimeZone string `json:"timeZone"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&c); err != nil {
+		return "", fmt.Errorf("calendar API: decode response: %T", err)
+	}
+	return c.TimeZone, nil
+}
+
 const fields = "nextPageToken,defaultReminders(minutes),items(id,iCalUID,status,summary,location,htmlLink,hangoutLink," +
 	"start,end,attendees(self,responseStatus),reminders,conferenceData/entryPoints(entryPointType,uri))"
 

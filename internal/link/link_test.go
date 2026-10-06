@@ -34,6 +34,8 @@ type env struct {
 	polled  []string
 	revoked []string
 	msgID   int64
+
+	failSends int // the next n POST /messages fail with HTTP 500
 }
 
 // Fake Zulip: users 1 (a@x), 2 (b@x), 3 (c@x); hidden@x is not found.
@@ -58,12 +60,21 @@ func newEnv(t *testing.T) *env {
 			fmt.Fprint(w, `{"result":"error","msg":"No such user","code":"BAD_REQUEST"}`)
 			return
 		}
-		fmt.Fprintf(w, `{"result":"success","user":{"user_id":%d,"email":"x","is_active":true,"timezone":"Pacific/Auckland"}}`, id)
+		tz := "Pacific/Auckland"
+		if id == 3 {
+			tz = "" // never set in the profile
+		}
+		fmt.Fprintf(w, `{"result":"success","user":{"user_id":%d,"email":"x","is_active":true,"timezone":"%s"}}`, id, tz)
 	})
 	mux.HandleFunc("POST /api/v1/messages", func(w http.ResponseWriter, r *http.Request) {
 		e.mu.Lock()
+		defer e.mu.Unlock()
+		if e.failSends > 0 {
+			e.failSends--
+			w.WriteHeader(500)
+			return
+		}
 		e.dms = append(e.dms, sent{r.FormValue("to"), r.FormValue("content")})
-		e.mu.Unlock()
 		fmt.Fprint(w, `{"result":"success","id":42}`)
 	})
 	mux.HandleFunc("POST /revoke", func(w http.ResponseWriter, r *http.Request) {
