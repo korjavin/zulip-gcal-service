@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -63,6 +64,18 @@ func TestMigrationsIdempotent(t *testing.T) {
 	s.DB.QueryRow(`PRAGMA journal_mode`).Scan(&mode)
 	if mode != "wal" {
 		t.Fatalf("journal_mode = %s", mode)
+	}
+}
+
+func TestOpenPathWithURIChars(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "a#b?c%20d e")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "db")
+	open(t, path)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("database not created at %s: %v", path, err)
 	}
 }
 

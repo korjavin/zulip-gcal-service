@@ -37,7 +37,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "busy_timeout(5000)")
 	q.Set("_txlock", "immediate") // take the write lock at BEGIN: no upgrade deadlocks
-	db, err := sql.Open("sqlite", "file:"+path+"?"+q.Encode())
+	db, err := sql.Open("sqlite", "file:"+(&url.URL{Path: path}).EscapedPath()+"?"+q.Encode())
 	if err != nil {
 		return nil, err
 	}
