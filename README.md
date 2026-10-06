@@ -13,6 +13,14 @@ get a Zulip DM before each meeting.
 * Reminder times follow the event's own Google reminders (or a lead time the
   user picks); times render in each reader's timezone.
 
-Status: in design. See [docs/design.md](docs/design.md).
+## Quick start
+
+1. Admin, once (~15 min): create a Google OAuth client and a Zulip bot, then
+   run the Docker image — step by step in
+   [docs/admin-setup.md](docs/admin-setup.md).
+2. Announce it to your users with the ready-to-paste text in
+   [docs/user-guide.md](docs/user-guide.md).
+
+Design and internals: [docs/design.md](docs/design.md).
 
 License: MIT.
