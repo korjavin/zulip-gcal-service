@@ -13,6 +13,11 @@ get a Zulip DM before each meeting.
 * Reminder times follow the event's own Google reminders (or a lead time the
   user picks); times render in each reader's timezone.
 
+<p>
+  <img src="docs/images/sign-in.png" alt="Sign-in page: Meeting reminders in Zulip, Sign in with Google" width="420">
+  <img src="docs/images/settings.png" alt="Settings page: reminder timing, calendars, skip declined events, test reminder, pause" width="300">
+</p>
+
 ## Quick start
 
 1. Admin, once (~15 min): create a Google OAuth client and a Zulip bot, then
